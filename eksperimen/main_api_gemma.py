@@ -77,7 +77,6 @@ collection: Optional[Any] = None
 
 
 def _check_rate_limit(request: Request, endpoint: str) -> None:
-
     try:
         client_ip = request.client.host if request.client else "unknown"
         rate_limiter = get_endpoint_rate_limiter()
@@ -132,25 +131,22 @@ async def lifespan(_: FastAPI):
         logger.error(f"Failed to load Reranker model: {str(e)}", exc_info=True)
         logger.warning("Proceeding without Reranker capabilities (Fallback mode enabled)")
 
-    # 3. Konek ChromaDB
+    # 3. Konek ChromaDB (PERBAIKAN KE HTTP CLIENT)
     try:
-        logger.info(f"Connecting to ChromaDB at: {LOCAL_DB_PATH}")
-        global chroma_client, collection
+        chroma_host = os.getenv("CHROMA_HOST", "localhost")
+        chroma_port = int(os.getenv("CHROMA_PORT", "8000"))
+        logger.info(f"Connecting to ChromaDB Server at {chroma_host}:{chroma_port} ...")
 
-        if not os.path.exists(LOCAL_DB_PATH):
-            os.makedirs(LOCAL_DB_PATH, exist_ok=True)
-            chroma_client = chromadb.PersistentClient(path=LOCAL_DB_PATH)
+        global chroma_client, collection
+        chroma_client = chromadb.HttpClient(host=chroma_host, port=chroma_port)
+
+        try:
+            collection = chroma_client.get_collection(name=COLLECTION_NAME)
+            doc_count = collection.count()
+            logger.info(f"✅ Connected to ChromaDB. Total Documents: {doc_count}")
+        except Exception:
+            logger.warning("Collection not found, creating new one")
             collection = chroma_client.create_collection(name=COLLECTION_NAME, metadata={"hnsw:space": "cosine"})
-            logger.info("✅ Created new ChromaDB collection")
-        else:
-            chroma_client = chromadb.PersistentClient(path=LOCAL_DB_PATH)
-            try:
-                collection = chroma_client.get_collection(name=COLLECTION_NAME)
-                doc_count = collection.count()
-                logger.info(f"✅ Connected to ChromaDB. Total Documents: {doc_count}")
-            except ValueError:
-                logger.warning("Collection not found, creating new one")
-                collection = chroma_client.create_collection(name=COLLECTION_NAME, metadata={"hnsw:space": "cosine"})
     except Exception as e:
         logger.error(f"Failed to connect ChromaDB: {str(e)}", exc_info=True)
         raise

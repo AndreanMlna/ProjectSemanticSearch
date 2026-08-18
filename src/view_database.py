@@ -6,7 +6,6 @@ import time
 import sys
 import requests
 
-
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.append(ROOT)
@@ -15,12 +14,10 @@ DB_PATH = os.path.join(ROOT, "chroma_db_storage")
 COLLECTION_NAME = "arsip_kampus_v2"
 UPLOAD_DIR = os.path.join(ROOT, "uploads")
 
-
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # Konfigurasi Halaman Streamlit (Harus dipanggil pertama)
 st.set_page_config(page_title="Sistem Arsip & AI RAG", page_icon="📚", layout="wide")
-
 
 try:
     from src.add_new_data import process_single_document, delete_document_by_id
@@ -28,7 +25,6 @@ except ImportError as e:
     process_single_document = None
     delete_document_by_id = None
     st.sidebar.error(f"⚠️ Modul 'add_new_data' gagal dimuat: {e}")
-
 
 with st.sidebar:
     # BAGIAN 1: PEMILIHAN MODEL LLM
@@ -39,7 +35,6 @@ with st.sidebar:
         options=["Gemma", "Llama 3", "Qwen"],
         index=0
     )
-
 
     st.success(f"Terhubung dengan API Backend untuk agen {selected_agent}.")
     st.divider()
@@ -81,17 +76,14 @@ with st.sidebar:
                     else:
                         st.error("Fungsi pemrosesan tidak aktif.")
 
-
 st.title("📚 Sistem Manajemen Arsip & AI Search")
 
-# Pengecekan Database
-if not os.path.exists(DB_PATH):
-    st.error("❌ Database ChromaDB belum ditemukan. Harap upload dokumen atau jalankan indexer terlebih dahulu.")
-    st.stop()
-
 try:
-    # Koneksi ke DB vektor
-    client = chromadb.PersistentClient(path=DB_PATH)
+    # Koneksi ke DB vektor via HTTP Client (Arsitektur Docker)
+    chroma_host = os.getenv("CHROMA_HOST", "localhost")
+    chroma_port = int(os.getenv("CHROMA_PORT", "8000"))
+
+    client = chromadb.HttpClient(host=chroma_host, port=chroma_port)
     collection = client.get_collection(name=COLLECTION_NAME)
     doc_count = collection.count()
 
@@ -105,7 +97,6 @@ try:
     if doc_count == 0:
         st.warning("Database saat ini kosong. Silakan gunakan panel kiri untuk menambahkan dokumen.")
         st.stop()
-
 
     tab1, tab2, tab3 = st.tabs(["AI Semantic Search (RAG)", "Eksplorasi Data", "Hapus Data"])
 
@@ -190,7 +181,6 @@ try:
                             "❌ Gagal terhubung ke API Backend. Pastikan container 'api-skripsi' berjalan dan URL sudah benar.")
                     except Exception as e:
                         st.error(f"❌ Terjadi kesalahan internal Streamlit: {str(e)}")
-
 
     with tab2:
         st.markdown("###  Preview Data Vektor (10 Terbaru)")

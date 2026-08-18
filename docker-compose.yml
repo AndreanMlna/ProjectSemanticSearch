@@ -1,6 +1,15 @@
 version: '3.8'
 
 services:
+  chroma-server:
+    image: chromadb/chroma:latest
+    container_name: skripsi_chroma
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./chroma_db_storage:/data
+    restart: always
+
   api-skripsi:
     build: .
     container_name: skripsi_backend
@@ -11,7 +20,7 @@ services:
     volumes:
       - ./.env:/app/.env
       - ./output:/app/output
-      - ./chroma_db_storage:/app/chroma_db_storage
+      # HAPUS: - ./chroma_db_storage:/app/chroma_db_storage (karena sudah diurus chroma-server)
       - ./uploads:/app/uploads
       - ./src:/app/src
       - ./eksperimen:/app/eksperimen
@@ -20,8 +29,12 @@ services:
       - OLLAMA_HOST=http://ollama-service:11434
       - RAG_LLM_BACKEND=ollama
       - RAG_MODEL_NAME=gemma2:2b
+      # TAMBAHKAN: Konfigurasi host dan port untuk nyambung ke Chroma
+      - CHROMA_HOST=chroma-server
+      - CHROMA_PORT=8000
     depends_on:
       - ollama-service
+      - chroma-server # Pastikan chroma nyala duluan
     deploy:
       resources:
         reservations:
@@ -41,18 +54,21 @@ services:
       - .env
     volumes:
       - ./.env:/app/.env
-      - ./chroma_db_storage:/app/chroma_db_storage
       - ./output:/app/output
       - ./uploads:/app/uploads
       - ./src:/app/src
     depends_on:
       - api-skripsi
+      - chroma-server
     environment:
       - PYTHONUNBUFFERED=1
       - API_URL=http://api-skripsi:8000/rag/ask
       - OLLAMA_HOST=http://ollama-service:11434
       - RAG_LLM_BACKEND=ollama
       - RAG_MODEL_NAME=gemma2:2b
+      # TAMBAHKAN: Konfigurasi host dan port
+      - CHROMA_HOST=chroma-server
+      - CHROMA_PORT=8000
     deploy:
       resources:
         reservations:

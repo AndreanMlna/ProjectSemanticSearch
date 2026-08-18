@@ -10,19 +10,21 @@ MODEL_PATH = os.path.join(ROOT, "output", "minilm-dokumen-arsip-boosted-new-seed
 TRAIN_FILE = os.path.join(ROOT, "data", "indodoc", "train.jsonl")
 META_FILE = os.path.join(ROOT, "data", "indodoc", "metadata.jsonl")
 COLLECTION_NAME = "arsip_kampus_v2"
-LOCAL_DB_PATH = os.path.join(ROOT, "chroma_db_storage")
+
 
 def get_chroma_client():
-    os.makedirs(LOCAL_DB_PATH, exist_ok=True)
-    return chromadb.PersistentClient(path=LOCAL_DB_PATH)
+
+    host = os.getenv("CHROMA_HOST", "localhost")
+
+    port = int(os.getenv("CHROMA_PORT", "8001" if host == "localhost" else "8000"))
+
+    print(f"[*] Menghubungkan ke ChromaDB Server di {host}:{port} ...")
+    return chromadb.HttpClient(host=host, port=port)
 
 
 def extract_keywords(text):
-
     parts = re.split(r'kata\s+kunci\s*:?', text, flags=re.IGNORECASE)
-
     if len(parts) > 1:
-        # Mengambil bagian terakhir setelah pemisahan
         return parts[-1].strip()
     return "-"
 
@@ -36,7 +38,6 @@ def load_metadata_list():
     with open(META_FILE, 'r', encoding='utf-8') as f:
         for line in f:
             data = json.loads(line)
-            # Ekstrak keywords dari content metadata
             content = data.get("content", "")
             data["keywords"] = extract_keywords(content)
             metadata_list.append(data)
@@ -56,7 +57,6 @@ def build_chroma_index():
     model = SentenceTransformer(MODEL_PATH)
     client = get_chroma_client()
 
-    # Memuat list metadata yang urut
     metadata_list = load_metadata_list()
     train_dataset = load_train_data()
 
@@ -69,16 +69,13 @@ def build_chroma_index():
     ids, documents, metadatas = [], [], []
 
     for idx, data in enumerate(train_dataset):
-        # 1. EMBEDDING: mengambil dari data train
         title = data.get("title", "")
         content = data.get("content", "")
         kw_embedding = extract_keywords_vector(content)
         text_to_embed = f"{title}. {content}. kata kunci: {kw_embedding}"
 
-        # 2. METADATA: mengambil dari metadata_list berdasarkan indeks
         if idx < len(metadata_list):
             source = metadata_list[idx]
-            # Menyesuaikan mapping metadata sesuai kebutuhan RAG Agent
             meta = {
                 "title": source.get("title", title),
                 "content": source.get("content", content),
@@ -103,7 +100,6 @@ def build_chroma_index():
         documents.append(text_to_embed)
         metadatas.append(meta)
 
-    # Simpan ke ChromaDB
     collection.add(
         ids=ids,
         embeddings=model.encode(documents, show_progress_bar=True).tolist(),
