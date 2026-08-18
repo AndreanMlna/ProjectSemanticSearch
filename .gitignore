@@ -1,0 +1,129 @@
+# .gitignore for projectSkripsiSemantic
+# Tailored to this repository: ignore virtualenv, caches, local DBs, large data, outputs, IDE files, and secrets
+
+#########################
+# Python
+#########################
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# Byte-compiled / optimized / DLL files
+*.so
+
+#########################
+# Virtual environments
+#########################
+.venv/
+venv/
+env/
+ENV/
+
+#########################
+# Environment / secret files
+#########################
+# Common env files - keep out of repo if they contain secrets
+.env
+.env.*
+
+# Local config overrides (use these for machine-specific secrets)
+config.local.yaml
+config.*.local.yaml
+
+#########################
+# Database / vector stores / indexes
+#########################
+# Local Chroma DB (sqlite and embedding files)
+chroma_db_storage/
+*.sqlite3
+*.sqlite
+*.db
+
+#########################
+# Data / uploads / outputs
+#########################
+# Raw or large data and generated output/results - typically not committed
+/data/
+/uploads/
+/output/
+/visualize/
+
+# Specific dataset files present in repo root (ignore if large / sensitive)
+/dataset_arsip.xlsx
+~$dataset_arsip.xlsx
+
+#########################
+# Model checkpoints / artifacts
+#########################
+checkpoints/
+models/
+*.ckpt
+*.pt
+*.pth
+*.bin
+
+#########################
+# Build / packaging
+#########################
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+#########################
+# Testing / coverage
+#########################
+.pytest_cache/
+coverage.xml
+htmlcov/
+.coverage
+.coverage.*
+
+#########################
+# Caches / linters / typecheckers
+#########################
+.mypy_cache/
+.ruff_cache/
+.cache/
+
+#########################
+# Logs / temp
+#########################
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+
+#########################
+# OS / Editor files
+#########################
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDEs
+.idea/
+.vscode/
+
+#########################
+# Notebook
+#########################
+.ipynb_checkpoints
+
+#########################
+# Secrets / keys
+#########################
+*.pem
+*.key
+*.cert
+
+# Other temporary files created by editors
+*~
+*.swp
+
+
+

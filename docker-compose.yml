@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  api-skripsi:
+    build: .
+    container_name: skripsi_backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./.env:/app/.env
+      - ./output:/app/output
+      - ./chroma_db_storage:/app/chroma_db_storage
+      - ./uploads:/app/uploads
+      - ./src:/app/src
+      - ./eksperimen:/app/eksperimen
+    environment:
+      - PYTHONUNBUFFERED=1
+      - OLLAMA_HOST=http://ollama-service:11434
+      - RAG_LLM_BACKEND=ollama
+      - RAG_MODEL_NAME=gemma2:2b
+    depends_on:
+      - ollama-service
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: always
+
+  db-viewer:
+    build: .
+    container_name: skripsi_viewer
+    command: streamlit run src/view_database.py --server.port 8501 --server.runOnSave true
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    volumes:
+      - ./.env:/app/.env
+      - ./chroma_db_storage:/app/chroma_db_storage
+      - ./output:/app/output
+      - ./uploads:/app/uploads
+      - ./src:/app/src
+    depends_on:
+      - api-skripsi
+    environment:
+      - PYTHONUNBUFFERED=1
+      - API_URL=http://api-skripsi:8000/rag/ask
+      - OLLAMA_HOST=http://ollama-service:11434
+      - RAG_LLM_BACKEND=ollama
+      - RAG_MODEL_NAME=gemma2:2b
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  ollama-service:
+    image: ollama/ollama:latest
+    container_name: skripsi_ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - D:\LLM:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: always

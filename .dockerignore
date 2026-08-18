@@ -1,0 +1,27 @@
+# Virtual Environments
+.venv/
+venv/
+env/
+
+# Data & Storage (Di-mount via volumes)
+output/
+chroma_db_storage/
+uploads/
+logs/
+
+# Python Cache & Compiled Files
+**/__pycache__/
+**/*.pyc       # PERBAIKAN: Sebelumnya **/.pyc (kurang tanda bintang)
+*.pyo
+*.pyd
+
+# Git
+.git/
+.gitignore
+
+
+.env
+
+
+Dockerfile
+docker-compose.yml

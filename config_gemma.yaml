@@ -1,0 +1,61 @@
+# Application Configuration
+# Semantic Search API Configuration File - Gemma Version
+
+# Model Configuration
+model:
+  path: "/app/output/minilm-dokumen-arsip-boosted-new-seed-42"
+  name: "minilm-dokumen-arsip-boosted-new-seed-42"
+  max_seq_length: 384
+  embedding_dimension: 384
+
+# Training Configuration
+training:
+  batch_size: 16
+  epochs: 10
+  learning_rate: 2e-5
+  warmup_steps_ratio: 0.1
+
+# ChromaDB Configuration
+database:
+  path: "/app/chroma_db_storage"
+  collection_name: "arsip_kampus_v2"
+  similarity_metric: "cosine"
+  max_results: 10
+
+# API Configuration
+api:
+  host: "0.0.0.0"
+  port: 8000
+  max_results: 10
+  default_top_k: 5
+  upload_folder: "uploads"
+  max_file_size: 52428800
+
+# LLM Configuration
+llm:
+  backend: "auto"   # "auto" | "vllm" | "ollama"
+  vllm:
+    base_url: "http://localhost:8001/v1"
+    model_name: "google/gemma-2-2b-it"
+  ollama:
+    base_url: "http://localhost:11434"
+    model_name: "gemma2:2b"
+  temperature: 0.3
+  max_tokens: 512
+
+# Logging Configuration
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  max_file_size: 10485760  # 10MB
+  backup_count: 5
+  log_dir: "logs"
+
+# Cache Configuration
+cache:
+  enabled: true
+  max_size: 500
+  ttl_minutes: 60
+
+# Environment
+environment: "development"  # development, staging, production
