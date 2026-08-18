@@ -3,22 +3,25 @@ import json
 import chromadb
 import re
 from sentence_transformers import SentenceTransformer
+from dotenv import load_dotenv
+
+
+load_dotenv()
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-MODEL_PATH = os.path.join(ROOT, "output", "minilm-dokumen-arsip-boosted-new-seed-42")
+MODEL_PATH = os.getenv("HF_MODEL_NAME", "andrerean/minilm-arsip-kampus-v1")
+
 TRAIN_FILE = os.path.join(ROOT, "data", "indodoc", "train.jsonl")
 META_FILE = os.path.join(ROOT, "data", "indodoc", "metadata.jsonl")
 COLLECTION_NAME = "arsip_kampus_v2"
 
 
 def get_chroma_client():
-
     host = os.getenv("CHROMA_HOST", "localhost")
-
     port = int(os.getenv("CHROMA_PORT", "8001" if host == "localhost" else "8000"))
 
-    print(f"[*] Menghubungkan ke ChromaDB Server di {host}:{port} ...")
+    print(f"[*] Menghubungkan ke ChromaDB Server API di {host}:{port} ...")
     return chromadb.HttpClient(host=host, port=port)
 
 
@@ -54,7 +57,9 @@ def load_train_data():
 
 
 def build_chroma_index():
+    print(f"[*] Memuat model AI dari: {MODEL_PATH}")
     model = SentenceTransformer(MODEL_PATH)
+
     client = get_chroma_client()
 
     metadata_list = load_metadata_list()
@@ -62,8 +67,9 @@ def build_chroma_index():
 
     try:
         client.delete_collection(name=COLLECTION_NAME)
-    except:
+    except Exception:  # Diberi Exception eksplisit agar sesuai standar Python
         pass
+
     collection = client.create_collection(name=COLLECTION_NAME, metadata={"hnsw:space": "cosine"})
 
     ids, documents, metadatas = [], [], []
@@ -100,13 +106,14 @@ def build_chroma_index():
         documents.append(text_to_embed)
         metadatas.append(meta)
 
+    print("[*] Memulai proses embedding dan pengiriman data ke server API ChromaDB...")
     collection.add(
         ids=ids,
         embeddings=model.encode(documents, show_progress_bar=True).tolist(),
         metadatas=metadatas,
         documents=documents
     )
-    print(f"[DONE] Tersimpan {collection.count()} dokumen dengan metadata yang diperbarui (snippet & content_only).")
+    print(f"[DONE] Tersimpan {collection.count()} dokumen ke database API.")
 
 
 if __name__ == "__main__":

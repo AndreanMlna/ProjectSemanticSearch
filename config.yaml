@@ -1,11 +1,12 @@
 # Application Configuration
-# Semantic Search API Configuration File
+# Semantic Search API Configuration File (No LLM)
 
 # Model Configuration
+# Secara default menggunakan model dari Hugging Face Hub (Akan dioverride oleh HF_MODEL_NAME di .env jika ada)
 model:
-  path: "/app/output/minilm-dokumen-arsip-boosted"
-  name: "minilm-dokumen-arsip-boosted"
-  max_seq_length: 256
+  path: "andrerean/minilm-arsip-kampus-v1"
+  name: "minilm-arsip-kampus-v1"
+  max_seq_length: 384
   embedding_dimension: 384
 
 # Training Configuration (for reference)
@@ -31,19 +32,6 @@ api:
   upload_folder: "uploads"
   max_file_size: 52428800  # 50MB in bytes
 
-# PENYESUAIAN LLM Configuration (Ollama Container Integration)
-
-llm:
-  backend: "auto"   # "auto" | "vllm" | "ollama"
-  vllm:
-    base_url: "http://localhost:8001/v1"
-    model_name: "Qwen/Qwen2.5-7B-Instruct"
-  ollama:
-    base_url: "http://localhost:11434"
-    model_name: "qwen2.5:7b"
-  temperature: 0.3
-  max_tokens: 512
-
 # Logging Configuration
 logging:
   level: "INFO"
@@ -59,4 +47,4 @@ cache:
   ttl_minutes: 60
 
 # Environment
-environment: "development"  # development, staging, production
+environment: "production"

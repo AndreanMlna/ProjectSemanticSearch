@@ -9,6 +9,10 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
+from dotenv import load_dotenv
+
+# Memuat variabel dari file .env
+load_dotenv()
 
 # Setup path agar modul lokal dapat diimpor
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -29,23 +33,22 @@ from src.cache_manager import get_cache_manager
 from src.batch_processor import create_batch_uploader, DocumentItem
 from src.reranker import get_reranker
 
-from src.rag_agent import get_rag_agent
-
 try:
     from src.config_manager import get_config
-
     config: Any = get_config()
 except Exception:
     config = None
 
-logger = setup_logging("main_api_llama")
+logger = setup_logging("main_api")
 
-# --- Sinkronisasi Path dengan config.yaml ---
-MODEL_PATH = os.path.join(ROOT, "output", "minilm-dokumen-arsip-boosted")
+
+MODEL_PATH = os.getenv("HF_MODEL_NAME", "andrerean/minilm-arsip-kampus-v1")
+
 if config:
     try:
         cfg_model_path = config["embedding"]["model_path"]
-        MODEL_PATH = cfg_model_path if os.path.isabs(cfg_model_path) else os.path.join(ROOT, cfg_model_path)
+        if cfg_model_path and os.path.isabs(cfg_model_path) and os.path.exists(cfg_model_path):
+            MODEL_PATH = cfg_model_path
     except (KeyError, TypeError):
         pass
 
@@ -69,7 +72,7 @@ if config:
         pass
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-logger.info(f"Config Synced -> Model Path: {MODEL_PATH}, DB Path: {LOCAL_DB_PATH}, Collection: {COLLECTION_NAME}")
+logger.info(f"Config Synced -> Model Path: {MODEL_PATH}, DB Collection: {COLLECTION_NAME}")
 
 # --- GLOBAL VARIABLES ---
 ml_models: dict = {}
@@ -111,15 +114,11 @@ async def lifespan(_: FastAPI):
     logger.info("=" * 50)
     logger.info("SERVER STARTING - Loading resources")
 
-    # 1. Load Model AI (Bi-Encoder / Embedding)
+
     try:
-        if os.path.exists(MODEL_PATH):
-            logger.info(f"Loading Model from: {MODEL_PATH}")
-            ml_models["minilm"] = SentenceTransformer(MODEL_PATH)
-            logger.info("✅ Model loaded successfully")
-        else:
-            logger.error(f"Model not found at: {MODEL_PATH}")
-            raise ModelNotLoadedError(f"Model path: {MODEL_PATH}")
+        logger.info(f"Loading Model from: {MODEL_PATH}")
+        ml_models["minilm"] = SentenceTransformer(MODEL_PATH)
+        logger.info("✅ Model loaded successfully")
     except Exception as e:
         logger.error(f"Failed to load model: {str(e)}", exc_info=True)
         raise
@@ -133,25 +132,22 @@ async def lifespan(_: FastAPI):
         logger.error(f"Failed to load Reranker model: {str(e)}", exc_info=True)
         logger.warning("Proceeding without Reranker capabilities (Fallback mode enabled)")
 
-    # 3. Konek ChromaDB
+    # 3. Konek ChromaDB (Menggunakan HttpClient untuk arsitektur Docker Server-Client)
     try:
-        logger.info(f"Connecting to ChromaDB at: {LOCAL_DB_PATH}")
-        global chroma_client, collection
+        chroma_host = os.getenv("CHROMA_HOST", "localhost")
+        chroma_port = int(os.getenv("CHROMA_PORT", "8000"))
+        logger.info(f"Connecting to ChromaDB Server at {chroma_host}:{chroma_port} ...")
 
-        if not os.path.exists(LOCAL_DB_PATH):
-            os.makedirs(LOCAL_DB_PATH, exist_ok=True)
-            chroma_client = chromadb.PersistentClient(path=LOCAL_DB_PATH)
+        global chroma_client, collection
+        chroma_client = chromadb.HttpClient(host=chroma_host, port=chroma_port)
+
+        try:
+            collection = chroma_client.get_collection(name=COLLECTION_NAME)
+            doc_count = collection.count()
+            logger.info(f"✅ Connected to ChromaDB. Total Documents: {doc_count}")
+        except Exception:
+            logger.warning("Collection not found, creating new one")
             collection = chroma_client.create_collection(name=COLLECTION_NAME, metadata={"hnsw:space": "cosine"})
-            logger.info("✅ Created new ChromaDB collection")
-        else:
-            chroma_client = chromadb.PersistentClient(path=LOCAL_DB_PATH)
-            try:
-                collection = chroma_client.get_collection(name=COLLECTION_NAME)
-                doc_count = collection.count()
-                logger.info(f"✅ Connected to ChromaDB. Total Documents: {doc_count}")
-            except ValueError:
-                logger.warning("Collection not found, creating new one")
-                collection = chroma_client.create_collection(name=COLLECTION_NAME, metadata={"hnsw:space": "cosine"})
     except Exception as e:
         logger.error(f"Failed to connect ChromaDB: {str(e)}", exc_info=True)
         raise
@@ -182,7 +178,7 @@ async def lifespan(_: FastAPI):
     logger.info("SERVER STOPPED - Resources cleaned up")
 
 
-app = FastAPI(title="Sistem Pencarian Arsip Cerdas (Gemma Edition)", lifespan=lifespan)
+app = FastAPI(title="Sistem Pencarian Arsip Cerdas (Semantic Search Only)", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -226,7 +222,7 @@ async def health_check():
 
 class SearchRequest(BaseModel):
     query: str
-    top_k: int = 5
+    top_k: int = 10
 
 
 @app.post("/search")
@@ -268,7 +264,6 @@ async def search_endpoint(request: SearchRequest, http_request: Request):
                 include=["metadatas", "distances", "documents"]
             )
 
-            # [PERUBAHAN] Petakan teks utuh dari db (documents) agar tidak terpotong
             full_docs_map = {}
             if 'ids' in results and 'documents' in results and results['documents']:
                 for idx, d_id in enumerate(results['ids'][0]):
@@ -525,71 +520,6 @@ async def delete_document_endpoint(
         raise HTTPException(status_code=500, detail=f"Gagal menghapus: {str(e)}")
 
 
-class RAGRequest(BaseModel):
-    question: str
-    top_k: int = 5
-
-
-@app.post("/rag/ask")
-async def rag_ask_endpoint(request: RAGRequest):
-    """RAG endpoint dengan pengurutan ulang dokumen (Rerank) ke model Gemma."""
-    logger.info(f"RAG request: '{request.question}'")
-
-    try:
-        embedding_model = ml_models.get("minilm")
-        if embedding_model is None:
-            raise HTTPException(status_code=503, detail="Model AI belum dimuat ke memori API.")
-
-        if collection is None:
-            raise HTTPException(status_code=503, detail="Koneksi database ChromaDB kosong.")
-
-        agent = get_rag_agent()
-
-        response = agent.answer(
-            question=request.question,
-            embedding_model=embedding_model,
-            chroma_collection=collection
-        )
-
-        return {
-            "status": "success",
-            "question": response.question,
-            "answer": response.answer,
-            "sources": response.sources,
-            "search_results_count": response.search_results_count,
-            "context_chars_total": response.context_chars_total,
-            "error": response.error
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"RAG error: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"RAG failed: {str(e)}")
-
-
-@app.get("/rag/status")
-async def rag_status_endpoint():
-    """Cek apakah Search API dan Ollama aktif."""
-    try:
-        agent = get_rag_agent()
-        status = agent.is_ready()
-
-        return {
-            "status": "success",
-            "rag_ready": status["ready"],
-            "components": {
-                "search_api": status["search_api"],
-                "ollama": status["ollama"],
-                "model": status["model"]
-            },
-            "timestamp": time.time()
-        }
-    except Exception as e:
-        logger.error(f"RAG status error: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to get RAG status")
-
-
 @app.get("/metrics")
 async def get_metrics():
     """Get API performance metrics"""
@@ -678,7 +608,7 @@ async def get_system_status():
             "components": {
                 "model": {
                     "status": "loaded" if model_ok else "not_loaded",
-                    "name": "minilm-dokumen-arsip-boosted"
+                    "name": MODEL_PATH
                 },
                 "database": {
                     "status": "connected" if db_ok else "disconnected",
@@ -765,7 +695,7 @@ def home():
     """Root endpoint - returns API information"""
     logger.debug("Root endpoint accessed")
     return {
-        "message": "API Semantic Search (ChromaDB Local) + Reranker Aktif (Gemma Edition)!",
+        "message": "API Semantic Search & Reranker Aktif (No LLM)!",
         "docs": "/docs",
         "version": "1.0",
         "status": "operational"

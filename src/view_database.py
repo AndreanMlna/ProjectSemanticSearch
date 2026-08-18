@@ -17,7 +17,7 @@ UPLOAD_DIR = os.path.join(ROOT, "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # Konfigurasi Halaman Streamlit (Harus dipanggil pertama)
-st.set_page_config(page_title="Sistem Arsip & AI RAG", page_icon="📚", layout="wide")
+st.set_page_config(page_title="Sistem Pencarian Arsip", page_icon="📚", layout="wide")
 
 try:
     from src.add_new_data import process_single_document, delete_document_by_id
@@ -27,16 +27,8 @@ except ImportError as e:
     st.sidebar.error(f"⚠️ Modul 'add_new_data' gagal dimuat: {e}")
 
 with st.sidebar:
-    # BAGIAN 1: PEMILIHAN MODEL LLM
-    st.header("⚙️ Konfigurasi Mesin RAG")
-
-    selected_agent = st.selectbox(
-        "Pilih Backend LLM aktif:",
-        options=["Gemma", "Llama 3", "Qwen"],
-        index=0
-    )
-
-    st.success(f"Terhubung dengan API Backend untuk agen {selected_agent}.")
+    st.header("⚙️ Konfigurasi Mesin Pencari")
+    st.success("Terhubung dengan Semantic Search Backend.")
     st.divider()
 
     # BAGIAN 2: UPLOAD DOKUMEN
@@ -76,7 +68,7 @@ with st.sidebar:
                     else:
                         st.error("Fungsi pemrosesan tidak aktif.")
 
-st.title("📚 Sistem Manajemen Arsip & AI Search")
+st.title("📚 Sistem Manajemen Arsip & Semantic Search")
 
 try:
     # Koneksi ke DB vektor via HTTP Client (Arsitektur Docker)
@@ -98,39 +90,39 @@ try:
         st.warning("Database saat ini kosong. Silakan gunakan panel kiri untuk menambahkan dokumen.")
         st.stop()
 
-    tab1, tab2, tab3 = st.tabs(["AI Semantic Search (RAG)", "Eksplorasi Data", "Hapus Data"])
+    tab1, tab2, tab3 = st.tabs(["Semantic Search", "Eksplorasi Data", "Hapus Data"])
 
-    # TAB 1: AI SEMANTIC SEARCH & RAG
+    # TAB 1: SEMANTIC SEARCH
     with tab1:
-        st.markdown("###  Pencarian Semantik Terintegrasi LLM")
+        st.markdown("###  Pencarian Semantik Arsip")
         st.markdown(
-            "Tanyakan informasi seputar arsip menggunakan bahasa sehari-hari. "
-            "Sistem akan mencari dokumen secara semantik dan menyintesis jawaban."
+            "Cari informasi seputar arsip menggunakan kata kunci atau pertanyaan. "
+            "Sistem akan mencari dokumen relevan berdasarkan makna."
         )
 
         # Form Pencarian Profesional
         with st.container(border=True):
             query = st.text_input(
-                "Masukkan Pertanyaan Anda:",
-                placeholder="Contoh: Jelaskan aturan magang PKL secara umum!",
+                "Masukkan Kata Kunci/Pertanyaan Anda:",
+                placeholder="Contoh: Aturan magang PKL",
                 label_visibility="collapsed"
             )
             col_btn, _ = st.columns([1, 4])
             with col_btn:
-                btn_search = st.button("Cari Jawaban ✨", type="primary", use_container_width=True)
+                btn_search = st.button("Cari Dokumen ✨", type="primary", use_container_width=True)
 
         if btn_search:
             if not query.strip():
-                st.warning("Pertanyaan tidak boleh kosong.")
+                st.warning("Kata kunci pencarian tidak boleh kosong.")
             else:
-                with st.spinner(f"🧠 Meminta API Backend memproses jawaban..."):
+                with st.spinner(f"🧠 Meminta API Backend memproses pencarian..."):
                     start_time = time.time()
                     try:
-
-                        API_URL = os.getenv("API_URL", "http://localhost:8000/rag/ask")
+                        # Request ke endpoint /search, bukan /rag/ask
+                        API_URL = os.getenv("API_URL", "http://localhost:8000/search")
 
                         payload = {
-                            "question": query,
+                            "query": query,
                             "top_k": 5
                         }
 
@@ -141,13 +133,9 @@ try:
                             resp = response.json()
                             total_time = time.time() - start_time
 
-                            if resp.get("error"):
-                                st.error(f"❌ Terjadi kesalahan pada Backend: {resp['error']}")
+                            if resp.get("status") != "success":
+                                st.error(f"❌ Terjadi kesalahan pada Backend.")
                             else:
-                                # Menampilkan Jawaban Utama
-                                st.markdown("#### 💡 Jawaban Sistem")
-                                st.info(resp.get("answer", "Tidak ada jawaban."), icon="🤖")
-
                                 # Menampilkan Metrik Kinerja Sederhana
                                 st.markdown("#### ⏱️ Metrik Inferensi")
                                 st.metric("Total Waktu Request", f"{total_time:.2f} s")
@@ -155,18 +143,22 @@ try:
                                 st.divider()
 
                                 # Menampilkan Referensi Dokumen dari Backend
-                                sources = resp.get("sources", [])
+                                sources = resp.get("data", [])
                                 st.markdown(f"#### 📄 Referensi Arsip Ditemukan ({len(sources)} Dokumen)")
 
                                 if not sources:
-                                    st.warning(
-                                        "Tidak ada dokumen relevan yang memenuhi standar skor untuk disajikan sebagai referensi.")
+                                    st.warning("Tidak ada dokumen relevan yang ditemukan.")
                                 else:
                                     for idx, source in enumerate(sources):
                                         title = source.get('title', 'Tanpa Judul')
                                         score = source.get('score', 0.0)
                                         file_name = source.get('file_name', '-')
-                                        content = source.get('full_context', '')
+                                        # Karena search API mengembalikan document_asli atau content_only
+                                        content = source.get('document_asli', source.get('content_only', ''))
+
+                                        # Tangani kasus dimana fallback mungkin hanya mereturn snippet jika document_asli kosong
+                                        if not content:
+                                            content = source.get('snippet', '')
 
                                         # Expander untuk tiap sumber
                                         with st.expander(f"Top {idx + 1} | {title} (Skor Relevansi: {score:.3f})"):

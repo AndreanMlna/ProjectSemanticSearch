@@ -1,4 +1,3 @@
-version: '3.8'
 
 services:
   chroma-server:
@@ -13,35 +12,22 @@ services:
   api-skripsi:
     build: .
     container_name: skripsi_backend
+    command: uvicorn src.main_api:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
     env_file:
       - .env
     volumes:
       - ./.env:/app/.env
-      - ./output:/app/output
-      # HAPUS: - ./chroma_db_storage:/app/chroma_db_storage (karena sudah diurus chroma-server)
-      - ./uploads:/app/uploads
       - ./src:/app/src
-      - ./eksperimen:/app/eksperimen
     environment:
       - PYTHONUNBUFFERED=1
-      - OLLAMA_HOST=http://ollama-service:11434
-      - RAG_LLM_BACKEND=ollama
-      - RAG_MODEL_NAME=gemma2:2b
-      # TAMBAHKAN: Konfigurasi host dan port untuk nyambung ke Chroma
+      # Konfigurasi koneksi Client-Server ke ChromaDB
       - CHROMA_HOST=chroma-server
       - CHROMA_PORT=8000
     depends_on:
-      - ollama-service
-      - chroma-server # Pastikan chroma nyala duluan
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+      - chroma-server
+
     restart: always
 
   db-viewer:
@@ -54,41 +40,14 @@ services:
       - .env
     volumes:
       - ./.env:/app/.env
-      - ./output:/app/output
-      - ./uploads:/app/uploads
       - ./src:/app/src
     depends_on:
       - api-skripsi
       - chroma-server
     environment:
       - PYTHONUNBUFFERED=1
-      - API_URL=http://api-skripsi:8000/rag/ask
-      - OLLAMA_HOST=http://ollama-service:11434
-      - RAG_LLM_BACKEND=ollama
-      - RAG_MODEL_NAME=gemma2:2b
-      # TAMBAHKAN: Konfigurasi host dan port
+      # URL diubah murni ke endpoint /search (Information Retrieval / Semantic Search)
+      - API_URL=http://api-skripsi:8000/search
       - CHROMA_HOST=chroma-server
       - CHROMA_PORT=8000
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-
-  ollama-service:
-    image: ollama/ollama:latest
-    container_name: skripsi_ollama
-    ports:
-      - "11434:11434"
-    volumes:
-      - D:\LLM:/root/.ollama
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     restart: always
