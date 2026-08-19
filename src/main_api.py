@@ -51,7 +51,6 @@ MODEL_PATH: str = os.getenv("HF_MODEL_NAME", "andrerean/minilm-arsip-kampus-v1")
 CE_MODEL_PATH: str = os.getenv("CE_MODEL", "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1")
 COLLECTION_NAME: str = os.getenv("CHROMA_COLLECTION", "arsip_kampus_v2")
 UPLOAD_FOLDER: str = os.getenv("UPLOAD_DIR", os.path.join(ROOT, "uploads"))
-LOGS_FOLDER: str = os.getenv("LOGS_DIR", os.path.join(ROOT, "logs"))
 
 # Konfigurasi CORS murni dari Environment Variable
 ALLOWED_ORIGINS_RAW: str = os.getenv("ALLOWED_ORIGINS", "*")
@@ -63,7 +62,6 @@ else:
     ]
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(LOGS_FOLDER, exist_ok=True)
 
 logger.info(
     f"Configuration Loaded -> Embedding Model: {MODEL_PATH}, Cross-Encoder: {CE_MODEL_PATH}, "
