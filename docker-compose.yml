@@ -6,7 +6,7 @@ services:
     ports:
       - "8001:8000"
     volumes:
-      - ./chroma_db_storage:/data
+      - chroma_data:/data
     restart: always
 
   api-skripsi:
@@ -51,3 +51,6 @@ services:
       - CHROMA_HOST=chroma-server
       - CHROMA_PORT=8000
     restart: always
+
+volumes:
+  chroma_data:

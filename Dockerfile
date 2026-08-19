@@ -12,10 +12,11 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --default-timeout=1000 -r requirements.txt
 
 
-COPY . .
+# Salin hanya source code yang diperlukan aplikasi
+COPY src/ ./src/
 
-
-RUN mkdir -p chroma_db_storage uploads output
+# Buat direktori yang dibutuhkan untuk runtime
+RUN mkdir -p uploads output logs
 
 
 EXPOSE 8000
