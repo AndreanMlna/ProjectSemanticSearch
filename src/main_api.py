@@ -1,83 +1,69 @@
 import os
 import sys
 import time
-import chromadb
-from typing import Optional, Any
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, UploadFile, Form, HTTPException, Path, Request
-from fastapi.staticfiles import StaticFiles
+from typing import Any, Optional
+
+import chromadb
+from dotenv import load_dotenv
+from fastapi import FastAPI, Form, HTTPException, Path, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
-from dotenv import load_dotenv
 
-# Memuat variabel dari file .env
+# =====================================================================
+# 1. SETUP ENVIRONMENT & ROOT PATH
+# =====================================================================
 load_dotenv()
 
-# Setup path agar modul lokal dapat diimpor
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from src.text_extractor import extract_text_from_file
-from src.logging_utils import setup_logging
-from src.error_handler import (
-    ModelNotLoadedError,
-    DatabaseNotConnectedError,
-    FileExtractionError
-)
-from src.metrics_collector import get_metrics_collector
-from src.request_logger import get_request_logger, get_performance_monitor
-from src.rate_limiter import get_endpoint_rate_limiter
+from src.batch_processor import DocumentItem, create_batch_uploader
 from src.cache_manager import get_cache_manager
-from src.batch_processor import create_batch_uploader, DocumentItem
+from src.error_handler import (
+    DatabaseNotConnectedError,
+    FileExtractionError,
+    ModelNotLoadedError,
+)
+from src.logging_utils import setup_logging
+from src.metrics_collector import get_metrics_collector
+from src.rate_limiter import get_endpoint_rate_limiter
 from src.reranker import get_reranker
-
-try:
-    from src.config_manager import get_config
-    config: Any = get_config()
-except Exception:
-    config = None
+from src.request_logger import get_performance_monitor, get_request_logger
+from src.text_extractor import extract_text_from_file
 
 logger = setup_logging("main_api")
 
-
+# =====================================================================
+# 2. CONFIGURATION & GLOBAL VARIABLES
+# =====================================================================
 MODEL_PATH = os.getenv("HF_MODEL_NAME", "andrerean/minilm-arsip-kampus-v1")
-
-if config:
-    try:
-        cfg_model_path = config["embedding"]["model_path"]
-        if cfg_model_path and os.path.isabs(cfg_model_path) and os.path.exists(cfg_model_path):
-            MODEL_PATH = cfg_model_path
-    except (KeyError, TypeError):
-        pass
-
-LOCAL_DB_PATH = os.path.join(ROOT, "chroma_db_storage")
-COLLECTION_NAME = "arsip_kampus_v2"
-if config:
-    try:
-        chroma_cfg = config["chroma"]
-        cfg_db_path = chroma_cfg.get("db_path", "chroma_db_storage")
-        LOCAL_DB_PATH = cfg_db_path if os.path.isabs(cfg_db_path) else os.path.join(ROOT, cfg_db_path)
-        COLLECTION_NAME = chroma_cfg.get("collection_name", COLLECTION_NAME)
-    except (KeyError, TypeError):
-        pass
-
-UPLOAD_FOLDER = os.path.join(ROOT, "uploads")
-if config:
-    try:
-        cfg_upload_dir = config["storage"]["upload_dir"]
-        UPLOAD_FOLDER = cfg_upload_dir if os.path.isabs(cfg_upload_dir) else os.path.join(ROOT, cfg_upload_dir)
-    except (KeyError, TypeError):
-        pass
+COLLECTION_NAME = os.getenv("CHROMA_COLLECTION", "arsip_kampus_v2")
+UPLOAD_FOLDER = os.getenv("UPLOAD_DIR", os.path.join(ROOT, "uploads"))
+LOGS_FOLDER = os.path.join(ROOT, "logs")
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-logger.info(f"Config Synced -> Model Path: {MODEL_PATH}, DB Collection: {COLLECTION_NAME}")
+os.makedirs(LOGS_FOLDER, exist_ok=True)
+logger.info(f"Configuration Loaded -> Model: {MODEL_PATH}, Collection: {COLLECTION_NAME}, Upload Dir: {UPLOAD_FOLDER}")
 
-# --- GLOBAL VARIABLES ---
+# Global application state
 ml_models: dict = {}
 chroma_client: Optional[Any] = None
 collection: Optional[Any] = None
+
+
+# =====================================================================
+# 3. HELPER FUNCTIONS
+# =====================================================================
+def _build_file_url(request: Request, filename: str) -> str:
+    """Membangun URL download file secara dinamis mengikuti host client (menghilangkan hardcode localhost)."""
+    if not filename:
+        return ""
+    base_url = str(request.base_url).rstrip("/")
+    return f"{base_url}/files/{filename}"
 
 
 def _check_rate_limit(request: Request, endpoint: str) -> None:
@@ -98,8 +84,8 @@ def _check_rate_limit(request: Request, endpoint: str) -> None:
                     "error": "Too Many Requests",
                     "message": f"Batas request tercapai untuk endpoint /{endpoint}. Coba lagi dalam 1 menit.",
                     "limit": info.get("requests_limit"),
-                    "reset_time": info.get("reset_time")
-                }
+                    "reset_time": info.get("reset_time"),
+                },
             )
 
         logger.debug(f"Rate limit OK: endpoint=/{endpoint}, ip={client_ip}, remaining={info.get('remaining')}")
@@ -109,12 +95,15 @@ def _check_rate_limit(request: Request, endpoint: str) -> None:
         logger.warning(f"Rate limiter check failed (non-fatal): {e}")
 
 
+# =====================================================================
+# 4. LIFESPAN HANDLER (STARTUP & SHUTDOWN)
+# =====================================================================
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     logger.info("=" * 50)
     logger.info("SERVER STARTING - Loading resources")
 
-
+    # 1. Load Model Embedding MiniLM
     try:
         logger.info(f"Loading Model from: {MODEL_PATH}")
         ml_models["minilm"] = SentenceTransformer(MODEL_PATH)
@@ -147,7 +136,9 @@ async def lifespan(_: FastAPI):
             logger.info(f"✅ Connected to ChromaDB. Total Documents: {doc_count}")
         except Exception:
             logger.warning("Collection not found, creating new one")
-            collection = chroma_client.create_collection(name=COLLECTION_NAME, metadata={"hnsw:space": "cosine"})
+            collection = chroma_client.create_collection(
+                name=COLLECTION_NAME, metadata={"hnsw:space": "cosine"}
+            )
     except Exception as e:
         logger.error(f"Failed to connect ChromaDB: {str(e)}", exc_info=True)
         raise
@@ -178,7 +169,13 @@ async def lifespan(_: FastAPI):
     logger.info("SERVER STOPPED - Resources cleaned up")
 
 
-app = FastAPI(title="Sistem Pencarian Arsip Cerdas (Semantic Search Only)", lifespan=lifespan)
+# =====================================================================
+# 5. FASTAPI APPLICATION SETUP
+# =====================================================================
+app = FastAPI(
+    title="Sistem Pencarian Arsip Cerdas (Semantic Search Only)",
+    lifespan=lifespan,
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -190,6 +187,30 @@ app.add_middleware(
 app.mount("/files", StaticFiles(directory=UPLOAD_FOLDER), name="files")
 
 
+# =====================================================================
+# 6. PYDANTIC SCHEMAS
+# =====================================================================
+class SearchRequest(BaseModel):
+    query: str
+    top_k: int = 10
+
+
+class BulkDocumentItem(BaseModel):
+    doc_id: str
+    title: str
+    content: str = ""
+    file_name: str = ""
+    file_path: str = ""
+    extracted_text: str = ""
+
+
+class BulkUploadRequest(BaseModel):
+    documents: list[BulkDocumentItem]
+
+
+# =====================================================================
+# 7. CORE SEARCH & RETRIEVAL ENDPOINTS
+# =====================================================================
 @app.get("/health")
 async def health_check():
     """Health check endpoint for monitoring"""
@@ -205,7 +226,7 @@ async def health_check():
             "model_loaded": model_ok,
             "db_connected": db_ok,
             "db_documents": db_count,
-            "timestamp": time.time()
+            "timestamp": time.time(),
         }
 
         logger.debug(f"Health check: {status}")
@@ -216,13 +237,8 @@ async def health_check():
         return {
             "status": "unhealthy",
             "error": str(e),
-            "timestamp": time.time()
+            "timestamp": time.time(),
         }
-
-
-class SearchRequest(BaseModel):
-    query: str
-    top_k: int = 10
 
 
 @app.post("/search")
@@ -261,13 +277,13 @@ async def search_endpoint(request: SearchRequest, http_request: Request):
             results = collection.query(
                 query_embeddings=[query_vector],
                 n_results=candidate_count,
-                include=["metadatas", "distances", "documents"]
+                include=["metadatas", "distances", "documents"],
             )
 
             full_docs_map = {}
-            if 'ids' in results and 'documents' in results and results['documents']:
-                for idx, d_id in enumerate(results['ids'][0]):
-                    full_docs_map[d_id] = results['documents'][0][idx]
+            if "ids" in results and "documents" in results and results["documents"]:
+                for idx, d_id in enumerate(results["ids"][0]):
+                    full_docs_map[d_id] = results["documents"][0][idx]
 
         except Exception as e:
             logger.error(f"Database query failed: {str(e)}")
@@ -279,7 +295,8 @@ async def search_endpoint(request: SearchRequest, http_request: Request):
 
             for doc in final_results:
                 doc_id = doc.get("id", "unknown")
-                doc["download_url"] = f"http://localhost:8000/files/{doc.get('file_name', '')}"
+                fname = doc.get("file_name", "")
+                doc["download_url"] = _build_file_url(http_request, fname)
 
                 if len(doc.get("snippet", "")) > 200:
                     doc["snippet"] = doc["snippet"][:200] + "..."
@@ -293,25 +310,25 @@ async def search_endpoint(request: SearchRequest, http_request: Request):
         except Exception as rerank_err:
             logger.warning(f"Reranking failed or skipped, fallback to semantic search: {rerank_err}")
             final_results = []
-            if results.get('metadatas') and results['metadatas'][0]:
-                for i, meta in enumerate(results['metadatas'][0]):
-                    score = 1 - results['distances'][0][i]
-                    doc_id = results['ids'][0][i] if 'ids' in results else "unknown"
-                    fname = meta.get('file_name', '')
+            if results.get("metadatas") and results["metadatas"][0]:
+                for i, meta in enumerate(results["metadatas"][0]):
+                    score = 1 - results["distances"][0][i]
+                    doc_id = results["ids"][0][i] if "ids" in results else "unknown"
+                    fname = meta.get("file_name", "")
 
-                    real_full_text = full_docs_map.get(doc_id, meta.get('content_only', ''))
+                    real_full_text = full_docs_map.get(doc_id, meta.get("content_only", ""))
 
                     final_results.append({
                         "id": doc_id,
                         "score": round(score, 4),
-                        "title": meta.get('title', 'Tanpa Judul'),
-                        "snippet": meta.get('snippet', ''),
+                        "title": meta.get("title", "Tanpa Judul"),
+                        "snippet": meta.get("snippet", ""),
                         "content_only": real_full_text,
                         "document_asli": real_full_text,
                         "file_name": fname,
-                        "download_url": f"http://localhost:8000/files/{fname}"
+                        "download_url": _build_file_url(http_request, fname),
                     })
-                final_results = final_results[:request.top_k]
+                final_results = final_results[: request.top_k]
 
         duration = time.perf_counter() - start_time
         logger.debug(f"Search and rerank completed in {duration:.4f}s")
@@ -320,7 +337,7 @@ async def search_endpoint(request: SearchRequest, http_request: Request):
             "status": "success",
             "time": f"{duration:.4f}s",
             "total_results": len(final_results),
-            "data": final_results
+            "data": final_results,
         }
 
         cache.set(query=request.query, top_k=request.top_k, results=response)
@@ -337,12 +354,15 @@ async def search_endpoint(request: SearchRequest, http_request: Request):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+# =====================================================================
+# 8. DOCUMENT MANAGEMENT ENDPOINTS (UPLOAD & DELETE)
+# =====================================================================
 @app.post("/upload")
 async def upload_endpoint(
-        http_request: Request,
-        title: str = Form(...),
-        content: str = Form(...),
-        file: UploadFile = None
+    http_request: Request,
+    title: str = Form(...),
+    content: str = Form(...),
+    file: UploadFile = None,
 ):
     _check_rate_limit(http_request, "upload")
     logger.debug(f"Upload request: title='{title}', file={file.filename if file else 'None'}")
@@ -386,8 +406,8 @@ async def upload_endpoint(
                 "file_name": safe_filename,
                 "file_path": file_path,
                 "snippet": content if content else extracted_text[:200],
-                "content_only": full_text_to_embed
-            }]
+                "content_only": full_text_to_embed,
+            }],
         )
 
         logger.info(f"Document uploaded successfully: {title} (ID: {doc_id})")
@@ -403,7 +423,7 @@ async def upload_endpoint(
             "status": "success",
             "message": f"Dokumen '{title}' berhasil disimpan & di-index!",
             "doc_id": doc_id,
-            "file_url": f"http://localhost:8000/files/{safe_filename}"
+            "file_url": _build_file_url(http_request, safe_filename),
         }
 
     except FileExtractionError as e:
@@ -412,19 +432,6 @@ async def upload_endpoint(
     except Exception as e:
         logger.error(f"Upload failed: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
-
-
-class BulkDocumentItem(BaseModel):
-    doc_id: str
-    title: str
-    content: str = ""
-    file_name: str = ""
-    file_path: str = ""
-    extracted_text: str = ""
-
-
-class BulkUploadRequest(BaseModel):
-    documents: list[BulkDocumentItem]
 
 
 @app.post("/upload/bulk")
@@ -455,7 +462,7 @@ async def bulk_upload_endpoint(request: BulkUploadRequest, http_request: Request
                     file_name=doc.file_name,
                     file_path=doc.file_path,
                     full_text=full_text_to_embed,
-                    snippet=snippet_text
+                    snippet=snippet_text,
                 )
             )
 
@@ -473,7 +480,7 @@ async def bulk_upload_endpoint(request: BulkUploadRequest, http_request: Request
         return {
             "status": "success",
             "message": f"Proses batch selesai. {result.success} sukses, {result.failed} gagal.",
-            "summary": result.to_dict()
+            "summary": result.to_dict(),
         }
 
     except Exception as e:
@@ -483,8 +490,8 @@ async def bulk_upload_endpoint(request: BulkUploadRequest, http_request: Request
 
 @app.delete("/documents/{doc_id}")
 async def delete_document_endpoint(
-        http_request: Request,
-        doc_id: str = Path(..., description="ID Dokumen yang akan dihapus")
+    http_request: Request,
+    doc_id: str = Path(..., description="ID Dokumen yang akan dihapus"),
 ):
     _check_rate_limit(http_request, "delete")
     logger.debug(f"Delete request for document: {doc_id}")
@@ -495,7 +502,7 @@ async def delete_document_endpoint(
 
     try:
         existing = collection.get(ids=[doc_id])
-        if not existing['ids']:
+        if not existing["ids"]:
             raise HTTPException(status_code=404, detail=f"Dokumen dengan ID '{doc_id}' tidak ditemukan.")
 
         collection.delete(ids=[doc_id])
@@ -510,7 +517,7 @@ async def delete_document_endpoint(
 
         return {
             "status": "success",
-            "message": f"Dokumen dengan ID '{doc_id}' berhasil dihapus permanen."
+            "message": f"Dokumen dengan ID '{doc_id}' berhasil dihapus permanen.",
         }
 
     except HTTPException:
@@ -520,6 +527,9 @@ async def delete_document_endpoint(
         raise HTTPException(status_code=500, detail=f"Gagal menghapus: {str(e)}")
 
 
+# =====================================================================
+# 9. MONITORING, METRICS, CACHE & SYSTEM STATUS ENDPOINTS
+# =====================================================================
 @app.get("/metrics")
 async def get_metrics():
     """Get API performance metrics"""
@@ -534,7 +544,7 @@ async def get_metrics():
             "timestamp": time.time(),
             "metrics": metrics.get_performance_summary(),
             "performance": performance.get_stats(),
-            "rate_limiting": rate_limiter.get_all_stats()
+            "rate_limiting": rate_limiter.get_all_stats(),
         }
     except Exception as e:
         logger.error(f"Error getting metrics: {str(e)}")
@@ -553,7 +563,7 @@ async def get_performance_stats():
             "avg_response_time": monitor.get_average_time(),
             "slow_requests": monitor.get_slow_requests(limit=5),
             "total_requests": len(monitor.request_times),
-            "slow_threshold": monitor.slow_threshold
+            "slow_threshold": monitor.slow_threshold,
         }
     except Exception as e:
         logger.error(f"Error getting performance stats: {str(e)}")
@@ -571,7 +581,7 @@ async def get_request_logs(limit: int = 20):
             "status": "success",
             "timestamp": time.time(),
             "limit": min(limit, 100),
-            "stats": stats
+            "stats": stats,
         }
     except Exception as e:
         logger.error(f"Error getting request logs: {str(e)}")
@@ -608,20 +618,20 @@ async def get_system_status():
             "components": {
                 "model": {
                     "status": "loaded" if model_ok else "not_loaded",
-                    "name": MODEL_PATH
+                    "name": MODEL_PATH,
                 },
                 "database": {
                     "status": "connected" if db_ok else "disconnected",
-                    "documents": db_count
+                    "documents": db_count,
                 },
                 "cache": cache_stats,
-                "rate_limiter": rate_limit_stats
+                "rate_limiter": rate_limit_stats,
             },
             "performance": {
                 "avg_response_time": performance.get_average_time(),
-                "total_requests": len(performance.request_times)
+                "total_requests": len(performance.request_times),
             },
-            "metrics": metrics.get_performance_summary()
+            "metrics": metrics.get_performance_summary(),
         }
     except Exception as e:
         logger.error(f"Error getting system status: {str(e)}")
@@ -637,7 +647,7 @@ async def export_metrics(export_format: str = "json"):
             raise ValueError("Only JSON format supported")
 
         metrics = get_metrics_collector()
-        filepath = f"logs/metrics_export_{int(time.time())}.json"
+        filepath = os.path.join(LOGS_FOLDER, f"metrics_export_{int(time.time())}.json")
 
         metrics.export_metrics(filepath)
         logger.info(f"Metrics exported to {filepath}")
@@ -646,7 +656,7 @@ async def export_metrics(export_format: str = "json"):
             "status": "success",
             "message": f"Metrics exported to {filepath}",
             "filepath": filepath,
-            "timestamp": time.time()
+            "timestamp": time.time(),
         }
     except Exception as e:
         logger.error(f"Error exporting metrics: {str(e)}")
@@ -663,7 +673,7 @@ async def get_cache_stats():
         return {
             "status": "success",
             "timestamp": time.time(),
-            "cache": stats
+            "cache": stats,
         }
     except Exception as e:
         logger.error(f"Error getting cache stats: {str(e)}")
@@ -683,13 +693,16 @@ async def clear_cache():
             "status": "success",
             "message": "Cache berhasil dibersihkan",
             "entries_cleared": cleared_count,
-            "timestamp": time.time()
+            "timestamp": time.time(),
         }
     except Exception as e:
         logger.error(f"Error clearing cache: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to clear cache")
 
 
+# =====================================================================
+# 10. ROOT ENDPOINT
+# =====================================================================
 @app.get("/")
 def home():
     """Root endpoint - returns API information"""
@@ -698,5 +711,5 @@ def home():
         "message": "API Semantic Search & Reranker Aktif (No LLM)!",
         "docs": "/docs",
         "version": "1.0",
-        "status": "operational"
+        "status": "operational",
     }
