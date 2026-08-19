@@ -2,16 +2,19 @@ import os
 import logging
 from typing import List, Dict, Any, Optional
 import numpy as np
+from dotenv import load_dotenv
 from sentence_transformers import CrossEncoder
 from Sastrawi.StopWordRemover.StopWordRemoverFactory import StopWordRemoverFactory
 from difflib import SequenceMatcher
+
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("RerankerModule")
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-DEFAULT_MODEL = os.path.join(ROOT, "output", "crossencoder-base-model")
+DEFAULT_MODEL = os.getenv("CE_MODEL", "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1")
 MIN_SCORE_THRESHOLD = 0.20
 
 
@@ -41,13 +44,14 @@ class ArsirReranker:
             cls._instance._initialized = False
         return cls._instance
 
-    def __init__(self, model_name_or_path: str = DEFAULT_MODEL):
+    def __init__(self, model_name_or_path: Optional[str] = None):
         if self._initialized:
             return
 
-        logger.info(f"[*] Menginisialisasi Cross-Encoder Reranker (Multilingual): {model_name_or_path}")
+        model_path = model_name_or_path or DEFAULT_MODEL
+        logger.info(f"[*] Menginisialisasi Cross-Encoder Reranker (HuggingFace): {model_path}")
         try:
-            self.model = CrossEncoder(model_name_or_path)
+            self.model = CrossEncoder(model_path)
             factory = StopWordRemoverFactory()
             self.stopword_remover = factory.create_stop_word_remover()
             self._initialized = True
@@ -144,8 +148,8 @@ class ArsirReranker:
 _reranker_instance = None
 
 
-def get_reranker() -> ArsirReranker:
+def get_reranker(model_name_or_path: Optional[str] = None) -> ArsirReranker:
     global _reranker_instance
     if _reranker_instance is None:
-        _reranker_instance = ArsirReranker()
+        _reranker_instance = ArsirReranker(model_name_or_path=model_name_or_path)
     return _reranker_instance

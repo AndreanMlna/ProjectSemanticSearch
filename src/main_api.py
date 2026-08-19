@@ -1,15 +1,22 @@
+"""
+Backend API untuk Sistem Pencarian Arsip Cerdas (Semantic Search & Reranker)
+Menggunakan FastAPI, SentenceTransformer (MiniLM), Cross-Encoder Reranker, dan ChromaDB Docker.
+"""
+
+import json
 import os
+import re
 import sys
 import time
 from contextlib import asynccontextmanager
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional
 
 import chromadb
 from dotenv import load_dotenv
-from fastapi import FastAPI, Form, HTTPException, Path, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Path, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer
 
 # =====================================================================
@@ -32,7 +39,7 @@ from src.logging_utils import setup_logging
 from src.metrics_collector import get_metrics_collector
 from src.rate_limiter import get_endpoint_rate_limiter
 from src.reranker import get_reranker
-from src.request_logger import get_performance_monitor, get_request_logger
+from src.request_logger import get_performance_monitor
 from src.text_extractor import extract_text_from_file
 
 logger = setup_logging("main_api")
@@ -40,17 +47,31 @@ logger = setup_logging("main_api")
 # =====================================================================
 # 2. CONFIGURATION & GLOBAL VARIABLES
 # =====================================================================
-MODEL_PATH = os.getenv("HF_MODEL_NAME", "andrerean/minilm-arsip-kampus-v1")
-COLLECTION_NAME = os.getenv("CHROMA_COLLECTION", "arsip_kampus_v2")
-UPLOAD_FOLDER = os.getenv("UPLOAD_DIR", os.path.join(ROOT, "uploads"))
-LOGS_FOLDER = os.path.join(ROOT, "logs")
+MODEL_PATH: str = os.getenv("HF_MODEL_NAME", "andrerean/minilm-arsip-kampus-v1")
+CE_MODEL_PATH: str = os.getenv("CE_MODEL", "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1")
+COLLECTION_NAME: str = os.getenv("CHROMA_COLLECTION", "arsip_kampus_v2")
+UPLOAD_FOLDER: str = os.getenv("UPLOAD_DIR", os.path.join(ROOT, "uploads"))
+LOGS_FOLDER: str = os.getenv("LOGS_DIR", os.path.join(ROOT, "logs"))
+
+# Konfigurasi CORS murni dari Environment Variable
+ALLOWED_ORIGINS_RAW: str = os.getenv("ALLOWED_ORIGINS", "*")
+if ALLOWED_ORIGINS_RAW.strip() == "*":
+    ALLOWED_ORIGINS: List[str] = ["*"]
+else:
+    ALLOWED_ORIGINS: List[str] = [
+        origin.strip() for origin in ALLOWED_ORIGINS_RAW.split(",") if origin.strip()
+    ]
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(LOGS_FOLDER, exist_ok=True)
-logger.info(f"Configuration Loaded -> Model: {MODEL_PATH}, Collection: {COLLECTION_NAME}, Upload Dir: {UPLOAD_FOLDER}")
+
+logger.info(
+    f"Configuration Loaded -> Embedding Model: {MODEL_PATH}, Cross-Encoder: {CE_MODEL_PATH}, "
+    f"Collection: {COLLECTION_NAME}, Upload Dir: {UPLOAD_FOLDER}, Allowed Origins: {ALLOWED_ORIGINS}"
+)
 
 # Global application state
-ml_models: dict = {}
+ml_models: Dict[str, Any] = {}
 chroma_client: Optional[Any] = None
 collection: Optional[Any] = None
 
@@ -58,9 +79,19 @@ collection: Optional[Any] = None
 # =====================================================================
 # 3. HELPER FUNCTIONS
 # =====================================================================
+def extract_keywords(text: str) -> str:
+    """Ekstraksi kata kunci dari teks menggunakan pola regex 'kata kunci: ...'."""
+    if not text:
+        return "-"
+    parts = re.split(r"kata\s+kunci\s*:?", text, flags=re.IGNORECASE)
+    if len(parts) > 1:
+        return parts[-1].strip()
+    return "-"
+
+
 def _build_file_url(request: Request, filename: str) -> str:
-    """Membangun URL download file secara dinamis mengikuti host client (menghilangkan hardcode localhost)."""
-    if not filename:
+    """Membangun URL download file secara dinamis mengikuti host client (bebas hardcode)."""
+    if not filename or filename == "-":
         return ""
     base_url = str(request.base_url).rstrip("/")
     return f"{base_url}/files/{filename}"
@@ -100,6 +131,7 @@ def _check_rate_limit(request: Request, endpoint: str) -> None:
 # =====================================================================
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    """Mengatur inisialisasi resource saat startup dan pembersihan saat shutdown."""
     logger.info("=" * 50)
     logger.info("SERVER STARTING - Loading resources")
 
@@ -114,8 +146,8 @@ async def lifespan(_: FastAPI):
 
     # 2. Load Model Cross-Encoder Reranker
     try:
-        logger.info("Loading Cross-Encoder Reranker Model...")
-        _ = get_reranker()
+        logger.info(f"Loading Cross-Encoder Reranker Model from: {CE_MODEL_PATH} ...")
+        _ = get_reranker(CE_MODEL_PATH)
         logger.info("✅ Cross-Encoder Reranker loaded successfully")
     except Exception as e:
         logger.error(f"Failed to load Reranker model: {str(e)}", exc_info=True)
@@ -174,13 +206,16 @@ async def lifespan(_: FastAPI):
 # =====================================================================
 app = FastAPI(
     title="Sistem Pencarian Arsip Cerdas (Semantic Search Only)",
+    description="REST API untuk pencarian arsip semantik, reranking, dan manajemen dokumen ChromaDB.",
+    version="1.0.0",
     lifespan=lifespan,
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -191,29 +226,22 @@ app.mount("/files", StaticFiles(directory=UPLOAD_FOLDER), name="files")
 # 6. PYDANTIC SCHEMAS
 # =====================================================================
 class SearchRequest(BaseModel):
-    query: str
-    top_k: int = 10
+    query: str = Field(..., description="Kueri pencarian teks", min_length=1)
+    top_k: int = Field(10, description="Jumlah dokumen teratas yang ingin dikembalikan", ge=1, le=50)
 
 
-class BulkDocumentItem(BaseModel):
-    doc_id: str
-    title: str
-    content: str = ""
-    file_name: str = ""
-    file_path: str = ""
-    extracted_text: str = ""
-
-
-class BulkUploadRequest(BaseModel):
-    documents: list[BulkDocumentItem]
+class UpdateDocumentRequest(BaseModel):
+    title: Optional[str] = Field(None, description="Judul baru dokumen")
+    content: Optional[str] = Field(None, description="Isi/deskripsi baru dokumen")
+    keywords: Optional[str] = Field(None, description="Kata kunci baru dokumen")
 
 
 # =====================================================================
 # 7. CORE SEARCH & RETRIEVAL ENDPOINTS
 # =====================================================================
-@app.get("/health")
+@app.get("/health", summary="Health Check")
 async def health_check():
-    """Health check endpoint for monitoring"""
+    """Endpoint untuk monitoring kesehatan service, model AI, dan database."""
     try:
         model_ok = ml_models.get("minilm") is not None
         db_ok = collection is not None
@@ -241,14 +269,14 @@ async def health_check():
         }
 
 
-@app.post("/search")
+@app.post("/search", summary="Pencarian Semantik & Reranking")
 async def search_endpoint(request: SearchRequest, http_request: Request):
+    """Melakukan pencarian arsip berbasis semantik menggunakan embedding MiniLM dan Cross-Encoder Reranker."""
     _check_rate_limit(http_request, "search")
     logger.debug(f"Search request: query='{request.query}', top_k={request.top_k}")
 
     try:
         model = ml_models.get("minilm")
-
         if not model:
             logger.error("Model not loaded")
             raise ModelNotLoadedError("AI model not loaded during startup")
@@ -355,21 +383,102 @@ async def search_endpoint(request: SearchRequest, http_request: Request):
 
 
 # =====================================================================
-# 8. DOCUMENT MANAGEMENT ENDPOINTS (UPLOAD & DELETE)
+# 8. DOCUMENT MANAGEMENT & CRUD ENDPOINTS
 # =====================================================================
-@app.post("/upload")
+@app.get("/documents", summary="[READ] Daftar Seluruh Dokumen")
+async def list_documents_endpoint(
+    limit: int = Query(20, ge=1, le=100, description="Jumlah dokumen per halaman"),
+    offset: int = Query(0, ge=0, description="Offset dokumen"),
+):
+    """Mendapatkan daftar seluruh dokumen yang tersimpan di ChromaDB dengan pagination."""
+    if collection is None:
+        raise HTTPException(status_code=503, detail="Database belum terhubung")
+
+    try:
+        total_count = collection.count()
+        data = collection.get(
+            limit=limit,
+            offset=offset,
+            include=["metadatas", "documents"],
+        )
+
+        items = []
+        if data.get("ids"):
+            for i, doc_id in enumerate(data["ids"]):
+                meta = data["metadatas"][i] if data.get("metadatas") else {}
+                doc_text = data["documents"][i] if data.get("documents") else ""
+                items.append({
+                    "id": doc_id,
+                    "title": meta.get("title", "Tanpa Judul"),
+                    "content": meta.get("content_only", doc_text),
+                    "snippet": meta.get("snippet", ""),
+                    "keywords": meta.get("keywords", "-"),
+                    "file_name": meta.get("file_name", "-"),
+                })
+
+        return {
+            "status": "success",
+            "total_documents": total_count,
+            "limit": limit,
+            "offset": offset,
+            "documents": items,
+        }
+    except Exception as e:
+        logger.error(f"Failed to fetch documents: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Gagal mengambil data dokumen: {str(e)}")
+
+
+@app.get("/documents/{doc_id}", summary="[READ] Detail Satu Dokumen")
+async def get_document_endpoint(
+    http_request: Request,
+    doc_id: str = Path(..., description="ID Dokumen yang dicari"),
+):
+    """Mendapatkan detail satu dokumen berdasarkan ID."""
+    if collection is None:
+        raise HTTPException(status_code=503, detail="Database belum terhubung")
+
+    try:
+        data = collection.get(ids=[doc_id], include=["metadatas", "documents"])
+        if not data.get("ids") or len(data["ids"]) == 0:
+            raise HTTPException(status_code=404, detail=f"Dokumen dengan ID '{doc_id}' tidak ditemukan")
+
+        meta = data["metadatas"][0] if data.get("metadatas") else {}
+        doc_text = data["documents"][0] if data.get("documents") else ""
+        fname = meta.get("file_name", "-")
+
+        return {
+            "status": "success",
+            "data": {
+                "id": doc_id,
+                "title": meta.get("title", ""),
+                "content": meta.get("content_only", doc_text),
+                "snippet": meta.get("snippet", ""),
+                "keywords": meta.get("keywords", "-"),
+                "file_name": fname,
+                "download_url": _build_file_url(http_request, fname),
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error reading document: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Gagal membaca dokumen: {str(e)}")
+
+
+@app.post("/upload", summary="[CREATE] Upload & Index Dokumen Tunggal")
 async def upload_endpoint(
     http_request: Request,
-    title: str = Form(...),
-    content: str = Form(...),
-    file: UploadFile = None,
+    title: str = Form(..., description="Judul dokumen"),
+    content: str = Form(..., description="Isi/deskripsi dokumen"),
+    keywords: Optional[str] = Form(None, description="Kata kunci dokumen (opsional)"),
+    file: Optional[UploadFile] = None,
 ):
+    """Mengunggah dan meng-indeks satu dokumen beserta judul, konten/deskripsi, kata kunci, dan file lampiran."""
     _check_rate_limit(http_request, "upload")
     logger.debug(f"Upload request: title='{title}', file={file.filename if file else 'None'}")
 
     try:
         model = ml_models.get("minilm")
-
         if not model:
             logger.error("Model not loaded for upload")
             raise ModelNotLoadedError("AI model not loaded")
@@ -377,20 +486,27 @@ async def upload_endpoint(
             logger.error("Database not connected for upload")
             raise DatabaseNotConnectedError("Database not connected")
 
-        safe_filename = file.filename.replace(" ", "_")
-        file_path = os.path.join(UPLOAD_FOLDER, safe_filename)
-        logger.debug(f"Saving file to: {file_path}")
+        safe_filename = "-"
+        file_path = "-"
+        extracted_text = ""
 
-        file_content_bytes = await file.read()
-        with open(file_path, "wb") as f:
-            f.write(file_content_bytes)
+        if file and file.filename:
+            safe_filename = file.filename.replace(" ", "_")
+            file_path = os.path.join(UPLOAD_FOLDER, safe_filename)
+            logger.debug(f"Saving file to: {file_path}")
 
-        logger.info(f"File saved: {safe_filename}")
+            file_content_bytes = await file.read()
+            with open(file_path, "wb") as f:
+                f.write(file_content_bytes)
 
-        logger.debug(f"Extracting text from file: {safe_filename}")
-        extracted_text = extract_text_from_file(file_path)
+            logger.info(f"File saved: {safe_filename}")
+            logger.debug(f"Extracting text from file: {safe_filename}")
+            extracted_text = extract_text_from_file(file_path)
 
-        full_text_to_embed = f"{title}. {content}. {extracted_text}"
+        # Penentuan kata kunci (jika tidak diisi, ekstrak otomatis dari konten atau default '-')
+        final_keywords = keywords.strip() if keywords and keywords.strip() else extract_keywords(content)
+
+        full_text_to_embed = f"{title}. {content}. kata kunci: {final_keywords}. {extracted_text}".strip()
         logger.debug(f"Encoding text ({len(full_text_to_embed)} chars)")
         vector = model.encode(full_text_to_embed).tolist()
 
@@ -405,7 +521,8 @@ async def upload_endpoint(
                 "title": title,
                 "file_name": safe_filename,
                 "file_path": file_path,
-                "snippet": content if content else extracted_text[:200],
+                "keywords": final_keywords,
+                "snippet": content if content else (extracted_text[:200] if extracted_text else "-"),
                 "content_only": full_text_to_embed,
             }],
         )
@@ -423,7 +540,8 @@ async def upload_endpoint(
             "status": "success",
             "message": f"Dokumen '{title}' berhasil disimpan & di-index!",
             "doc_id": doc_id,
-            "file_url": _build_file_url(http_request, safe_filename),
+            "keywords": final_keywords,
+            "file_url": _build_file_url(http_request, safe_filename) if safe_filename != "-" else "",
         }
 
     except FileExtractionError as e:
@@ -434,65 +552,199 @@ async def upload_endpoint(
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 
-@app.post("/upload/bulk")
-async def bulk_upload_endpoint(request: BulkUploadRequest, http_request: Request):
-    """Endpoint untuk mengunggah dan meng-indeks dokumen dalam jumlah besar (bulk)."""
+@app.post("/upload/jsonl", summary="[CREATE] Upload & Index File JSONL Massal")
+async def upload_jsonl_endpoint(
+    http_request: Request,
+    file: UploadFile = File(..., description="File dataset berformat .jsonl (1 baris = 1 objek JSON)"),
+    meta_file: Optional[UploadFile] = File(None, description="File metadata berformat .jsonl (opsional)"),
+):
+    """Mengunggah file .jsonl (seperti train.jsonl & metadata.jsonl) dan meng-indeks seluruh dokumen ke ChromaDB secara batch."""
     _check_rate_limit(http_request, "upload")
-    logger.info(f"Bulk upload request received: {len(request.documents)} documents")
+    logger.info(f"JSONL upload request received: {file.filename}")
+
+    if not file.filename.endswith((".jsonl", ".txt")):
+        raise HTTPException(
+            status_code=400,
+            detail="Format file tidak didukung. Harap unggah file dengan ekstensi .jsonl",
+        )
 
     model = ml_models.get("minilm")
     if not model:
-        logger.error("Model not loaded for bulk upload")
+        logger.error("Model not loaded for jsonl upload")
         raise ModelNotLoadedError("AI model not loaded")
     if collection is None:
-        logger.error("Database not connected for bulk upload")
+        logger.error("Database not connected for jsonl upload")
         raise DatabaseNotConnectedError("Database not connected")
 
     try:
+        content_bytes = await file.read()
+        lines = content_bytes.decode("utf-8", errors="replace").splitlines()
+
+        # Baca file metadata jika disertakan
+        metadata_map = {}
+        if meta_file and meta_file.filename:
+            meta_bytes = await meta_file.read()
+            meta_lines = meta_bytes.decode("utf-8", errors="replace").splitlines()
+            for idx, m_line in enumerate(meta_lines):
+                if m_line.strip():
+                    try:
+                        m_data = json.loads(m_line)
+                        metadata_map[idx] = m_data
+                    except json.JSONDecodeError:
+                        continue
+
         items_to_upload = []
-        for doc in request.documents:
-            full_text_to_embed = f"{doc.title}. {doc.content}. {doc.extracted_text}".strip()
-            snippet_text = doc.content if doc.content else doc.extracted_text[:300]
+        for idx, line in enumerate(lines):
+            line_str = line.strip()
+            if not line_str:
+                continue
+
+            try:
+                data = json.loads(line_str)
+            except json.JSONDecodeError as json_err:
+                logger.warning(f"Skipping invalid JSON line {idx}: {json_err}")
+                continue
+
+            title = data.get("title", f"Dokumen {idx + 1}")
+            content = data.get("content", "")
+            kw = data.get("keywords") or extract_keywords(content)
+            doc_id = data.get("id") or data.get("doc_id") or f"doc_{int(time.time())}_{idx}"
+            file_name = data.get("file_name", "-")
+            file_path = data.get("file_path", "-")
+            extracted_text = data.get("extracted_text", "")
+
+            # Gabungkan dengan metadata tambahan jika ada
+            if idx in metadata_map:
+                meta_item = metadata_map[idx]
+                title = meta_item.get("title", title)
+                file_name = meta_item.get("file_name", file_name)
+                file_path = meta_item.get("file_path", file_path)
+                kw = meta_item.get("keywords", kw)
+
+            full_text_to_embed = f"{title}. {content}. kata kunci: {kw}. {extracted_text}".strip()
+            snippet_text = content if content else (extracted_text[:300] if extracted_text else "-")
 
             items_to_upload.append(
                 DocumentItem(
-                    doc_id=doc.doc_id,
-                    title=doc.title,
-                    content=doc.content,
-                    file_name=doc.file_name,
-                    file_path=doc.file_path,
+                    doc_id=str(doc_id),
+                    title=title,
+                    content=content,
+                    file_name=file_name,
+                    file_path=file_path,
                     full_text=full_text_to_embed,
                     snippet=snippet_text,
                 )
             )
 
+        if not items_to_upload:
+            raise HTTPException(status_code=400, detail="Tidak ada data dokumen valid yang ditemukan dalam file .jsonl.")
+
+        logger.info(f"Memulai proses batch upload untuk {len(items_to_upload)} dokumen JSONL...")
         uploader = create_batch_uploader(model, collection)
-        result = uploader.upload_batch(items_to_upload, skip_existing=True)
+        result = uploader.upload_batch(items_to_upload, skip_existing=False)
 
         if result.success > 0:
             try:
                 cache = get_cache_manager()
                 cleared = cache.clear()
-                logger.info(f"Cache cleared after bulk upload: {cleared} entries removed")
+                logger.info(f"Cache cleared after JSONL upload: {cleared} entries removed")
             except Exception as cache_err:
                 logger.warning(f"Cache clear warning (non-fatal): {cache_err}")
 
         return {
             "status": "success",
-            "message": f"Proses batch selesai. {result.success} sukses, {result.failed} gagal.",
+            "message": f"Upload JSONL selesai. {result.success} dokumen berhasil di-index, {result.failed} gagal.",
+            "total_documents": collection.count(),
             "summary": result.to_dict(),
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Bulk upload failed: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Bulk upload failed: {str(e)}")
+        logger.error(f"JSONL upload failed: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Gagal memproses file JSONL: {str(e)}")
 
 
-@app.delete("/documents/{doc_id}")
+@app.put("/documents/{doc_id}", summary="[UPDATE] Perbarui Data Dokumen")
+async def update_document_endpoint(
+    http_request: Request,
+    doc_id: str = Path(..., description="ID Dokumen yang akan diperbarui"),
+    update_data: UpdateDocumentRequest = ...,
+):
+    """Memperbarui judul, konten, atau kata kunci dokumen dan otomatis meng-update vektor embedding-nya."""
+    _check_rate_limit(http_request, "upload")
+    if collection is None:
+        raise HTTPException(status_code=503, detail="Database belum terhubung")
+    model = ml_models.get("minilm")
+    if not model:
+        raise HTTPException(status_code=503, detail="AI model belum dimuat")
+
+    try:
+        existing = collection.get(ids=[doc_id], include=["metadatas", "documents"])
+        if not existing.get("ids") or len(existing["ids"]) == 0:
+            raise HTTPException(status_code=404, detail=f"Dokumen dengan ID '{doc_id}' tidak ditemukan")
+
+        old_meta = existing["metadatas"][0] if existing.get("metadatas") else {}
+        old_doc = existing["documents"][0] if existing.get("documents") else ""
+
+        new_title = update_data.title if update_data.title is not None else old_meta.get("title", "")
+        new_content = update_data.content if update_data.content is not None else old_meta.get("content", old_doc)
+        new_keywords = (
+            update_data.keywords
+            if update_data.keywords is not None
+            else old_meta.get("keywords", extract_keywords(new_content))
+        )
+
+        file_name = old_meta.get("file_name", "-")
+        file_path = old_meta.get("file_path", "-")
+
+        new_text_to_embed = f"{new_title}. {new_content}. kata kunci: {new_keywords}".strip()
+        new_vector = model.encode(new_text_to_embed).tolist()
+
+        updated_meta = {
+            "title": new_title,
+            "content": new_content,
+            "snippet": new_content[:200] if new_content else "",
+            "content_only": new_text_to_embed,
+            "file_name": file_name,
+            "file_path": file_path,
+            "keywords": new_keywords,
+        }
+
+        collection.update(
+            ids=[doc_id],
+            embeddings=[new_vector],
+            documents=[new_text_to_embed],
+            metadatas=[updated_meta],
+        )
+
+        try:
+            get_cache_manager().clear()
+        except Exception:
+            pass
+
+        return {
+            "status": "success",
+            "message": f"Dokumen '{doc_id}' berhasil diperbarui.",
+            "data": {
+                "id": doc_id,
+                "title": new_title,
+                "keywords": new_keywords,
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Update error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Gagal memperbarui dokumen: {str(e)}")
+
+
+@app.delete("/documents/{doc_id}", summary="[DELETE] Hapus Satu Dokumen")
 async def delete_document_endpoint(
     http_request: Request,
     doc_id: str = Path(..., description="ID Dokumen yang akan dihapus"),
 ):
+    """Menghapus dokumen tunggal berdasarkan ID."""
     _check_rate_limit(http_request, "delete")
     logger.debug(f"Delete request for document: {doc_id}")
 
@@ -527,12 +779,51 @@ async def delete_document_endpoint(
         raise HTTPException(status_code=500, detail=f"Gagal menghapus: {str(e)}")
 
 
+@app.delete("/documents", summary="[DELETE ALL] Reset / Kosongkan Database")
+async def reset_all_documents_endpoint(
+    http_request: Request,
+    confirm: bool = Query(False, description="Set True untuk mengonfirmasi penghapusan seluruh data"),
+):
+    """Mengosongkan/menghapus seluruh dokumen dalam database vektor."""
+    global collection
+    _check_rate_limit(http_request, "delete")
+
+    if not confirm:
+        raise HTTPException(
+            status_code=400,
+            detail="Operasi berbahaya: Tambahkan parameter '?confirm=true' untuk mereset seluruh database.",
+        )
+
+    if chroma_client is None:
+        raise HTTPException(status_code=503, detail="Database belum terhubung")
+
+    try:
+        chroma_client.delete_collection(name=COLLECTION_NAME)
+        collection = chroma_client.create_collection(
+            name=COLLECTION_NAME, metadata={"hnsw:space": "cosine"}
+        )
+
+        try:
+            get_cache_manager().clear()
+        except Exception:
+            pass
+
+        return {
+            "status": "success",
+            "message": "Seluruh dokumen dalam koleksi berhasil direset/dikosongkan.",
+            "total_documents": 0,
+        }
+    except Exception as e:
+        logger.error(f"Failed to reset collection: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Gagal mereset koleksi: {str(e)}")
+
+
 # =====================================================================
 # 9. MONITORING, METRICS, CACHE & SYSTEM STATUS ENDPOINTS
 # =====================================================================
-@app.get("/metrics")
+@app.get("/metrics", summary="Metrik Performa API")
 async def get_metrics():
-    """Get API performance metrics"""
+    """Mengambil ringkasan metrik performa API, waktu respons, dan rate limiting."""
     logger.debug("Metrics endpoint accessed")
     try:
         metrics = get_metrics_collector()
@@ -551,46 +842,9 @@ async def get_metrics():
         raise HTTPException(status_code=500, detail="Failed to get metrics")
 
 
-@app.get("/performance")
-async def get_performance_stats():
-    """Get detailed performance statistics"""
-    logger.debug("Performance endpoint accessed")
-    try:
-        monitor = get_performance_monitor()
-        return {
-            "status": "success",
-            "timestamp": time.time(),
-            "avg_response_time": monitor.get_average_time(),
-            "slow_requests": monitor.get_slow_requests(limit=5),
-            "total_requests": len(monitor.request_times),
-            "slow_threshold": monitor.slow_threshold,
-        }
-    except Exception as e:
-        logger.error(f"Error getting performance stats: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to get performance stats")
-
-
-@app.get("/logs/requests")
-async def get_request_logs(limit: int = 20):
-    """Get recent request logs"""
-    logger.debug(f"Request logs endpoint accessed (limit={limit})")
-    try:
-        req_logger = get_request_logger()
-        stats = req_logger.get_stats()
-        return {
-            "status": "success",
-            "timestamp": time.time(),
-            "limit": min(limit, 100),
-            "stats": stats,
-        }
-    except Exception as e:
-        logger.error(f"Error getting request logs: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to get request logs")
-
-
-@app.get("/status")
+@app.get("/status", summary="Status Kesehatan Komprehensif")
 async def get_system_status():
-    """Get comprehensive system status"""
+    """Mengambil status operasional seluruh komponen sistem (Model, DB, Cache, Rate Limiter)."""
     logger.debug("System status endpoint accessed")
     try:
         model_ok = ml_models.get("minilm") is not None
@@ -638,34 +892,9 @@ async def get_system_status():
         raise HTTPException(status_code=500, detail="Failed to get system status")
 
 
-@app.post("/metrics/export")
-async def export_metrics(export_format: str = "json"):
-    """Export metrics to file"""
-    logger.debug(f"Export metrics endpoint accessed (format={export_format})")
-    try:
-        if export_format != "json":
-            raise ValueError("Only JSON format supported")
-
-        metrics = get_metrics_collector()
-        filepath = os.path.join(LOGS_FOLDER, f"metrics_export_{int(time.time())}.json")
-
-        metrics.export_metrics(filepath)
-        logger.info(f"Metrics exported to {filepath}")
-
-        return {
-            "status": "success",
-            "message": f"Metrics exported to {filepath}",
-            "filepath": filepath,
-            "timestamp": time.time(),
-        }
-    except Exception as e:
-        logger.error(f"Error exporting metrics: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to export metrics: {str(e)}")
-
-
-@app.get("/cache/stats")
+@app.get("/cache/stats", summary="Statistik Cache")
 async def get_cache_stats():
-    """Get cache statistics"""
+    """Melihat status ukuran dan efektivitas cache pencarian."""
     logger.debug("Cache stats endpoint accessed")
     try:
         cache = get_cache_manager()
@@ -680,9 +909,9 @@ async def get_cache_stats():
         raise HTTPException(status_code=500, detail="Failed to get cache stats")
 
 
-@app.post("/cache/clear")
+@app.post("/cache/clear", summary="Bersihkan Cache")
 async def clear_cache():
-    """Clear all cache entries manually"""
+    """Membersihkan seluruh entri cache secara manual."""
     logger.debug("Cache clear endpoint accessed")
     try:
         cache = get_cache_manager()
@@ -703,13 +932,13 @@ async def clear_cache():
 # =====================================================================
 # 10. ROOT ENDPOINT
 # =====================================================================
-@app.get("/")
+@app.get("/", summary="Root API Information")
 def home():
-    """Root endpoint - returns API information"""
+    """Endpoint informasi status dan dokumentasi API."""
     logger.debug("Root endpoint accessed")
     return {
         "message": "API Semantic Search & Reranker Aktif (No LLM)!",
         "docs": "/docs",
-        "version": "1.0",
+        "version": "1.0.0",
         "status": "operational",
     }
