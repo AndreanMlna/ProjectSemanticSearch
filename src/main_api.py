@@ -7,14 +7,31 @@ import json
 import os
 import re
 import sys
+import secrets
 import time
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
 import chromadb
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, Path, Query, Request, UploadFile
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+    Security,
+    UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import (
+    APIKeyHeader,
+    HTTPAuthorizationCredentials,
+    HTTPBearer,
+)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer
@@ -47,10 +64,16 @@ logger = setup_logging("main_api")
 # =====================================================================
 # 2. CONFIGURATION & GLOBAL VARIABLES
 # =====================================================================
-MODEL_PATH: str = os.getenv("HF_MODEL_NAME", "andrerean/minilm-arsip-kampus-v1")
+MODEL_PATH: str = os.getenv("HF_MODEL_NAME", "andrerean/minilm-arsip-kampus-seranah")
 CE_MODEL_PATH: str = os.getenv("CE_MODEL", "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1")
 COLLECTION_NAME: str = os.getenv("CHROMA_COLLECTION", "arsip_kampus_v2")
 UPLOAD_FOLDER: str = os.getenv("UPLOAD_DIR", os.path.join(ROOT, "uploads"))
+
+# Konfigurasi Keamanan & API Authentication
+API_SECRET_KEY: str = os.getenv("API_SECRET_KEY", "seranah_secret_key_2026")
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False, description="API Key Header")
+http_bearer = HTTPBearer(auto_error=False, description="Bearer Token")
+PUBLIC_ENDPOINTS = {"/health", "/", "/docs", "/redoc", "/openapi.json"}
 
 # Konfigurasi CORS murni dari Environment Variable
 ALLOWED_ORIGINS_RAW: str = os.getenv("ALLOWED_ORIGINS", "*")
@@ -65,7 +88,8 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 logger.info(
     f"Configuration Loaded -> Embedding Model: {MODEL_PATH}, Cross-Encoder: {CE_MODEL_PATH}, "
-    f"Collection: {COLLECTION_NAME}, Upload Dir: {UPLOAD_FOLDER}, Allowed Origins: {ALLOWED_ORIGINS}"
+    f"Collection: {COLLECTION_NAME}, Upload Dir: {UPLOAD_FOLDER}, Allowed Origins: {ALLOWED_ORIGINS}, "
+    f"Auth Protected: YES (Public: /health, /)"
 )
 
 # Global application state
@@ -75,8 +99,46 @@ collection: Optional[Any] = None
 
 
 # =====================================================================
-# 3. HELPER FUNCTIONS
+# 3. HELPER FUNCTIONS & AUTHENTICATION
 # =====================================================================
+async def verify_api_key(
+    request: Request,
+    api_key: Optional[str] = Security(api_key_header),
+    bearer: Optional[HTTPAuthorizationCredentials] = Security(http_bearer),
+) -> bool:
+    """
+    Middleware dependency untuk memverifikasi autentikasi API Key / Bearer Token.
+    Mengecualikan endpoint /health, /, dan dokumentasi OpenAPI (/docs, /redoc, /openapi.json).
+    Mendukung header 'X-API-Key' atau 'Authorization: Bearer <API_KEY>'.
+    """
+    path = request.url.path
+
+    # 1. Pengecualian endpoint publik (/health, /, /docs, /redoc, /openapi.json)
+    if path in PUBLIC_ENDPOINTS or path.startswith(("/docs", "/redoc", "/openapi.json")):
+        return True
+
+    # 2. Ambil token dari X-API-Key atau Authorization Bearer
+    token = api_key or (bearer.credentials if bearer else None)
+
+    # 3. Verifikasi token menggunakan constant-time comparison (mencegah timing attack)
+    if not token or not secrets.compare_digest(token, API_SECRET_KEY):
+        client_ip = request.client.host if request.client else "unknown"
+        logger.warning(
+            f"Akses tidak sah ditolak: endpoint={path}, ip={client_ip}, token_provided={'yes' if token else 'no'}"
+        )
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "status": "error",
+                "error": "Unauthorized",
+                "message": "Autentikasi gagal. Sediakan API Key yang valid melalui header 'X-API-Key' atau 'Authorization: Bearer <API_KEY>'.",
+            },
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return True
+
+
 def extract_keywords(text: str) -> str:
     """Ekstraksi kata kunci dari teks menggunakan pola regex 'kata kunci: ...'."""
     if not text:
@@ -122,6 +184,40 @@ def _check_rate_limit(request: Request, endpoint: str) -> None:
         raise
     except Exception as e:
         logger.warning(f"Rate limiter check failed (non-fatal): {e}")
+
+
+def get_active_collection() -> Optional[Any]:
+    """Mengambil koleksi ChromaDB yang aktif, atau melakukan auto-reconnect jika koleksi di-reset di server."""
+    global chroma_client, collection
+    if chroma_client is None:
+        try:
+            chroma_host = os.getenv("CHROMA_HOST", "localhost")
+            chroma_port = int(os.getenv("CHROMA_PORT", "8000"))
+            chroma_client = chromadb.HttpClient(host=chroma_host, port=chroma_port)
+        except Exception as e:
+            logger.error(f"Gagal menghubungkan ke ChromaDB: {e}")
+            return None
+
+    try:
+        if collection is not None:
+            # Uji apakah koleksi masih valid di server
+            collection.count()
+            return collection
+    except Exception:
+        logger.warning(f"Koleksi '{COLLECTION_NAME}' terdeteksi telah di-reset/diperbarui. Melakukan re-fetch...")
+
+    try:
+        collection = chroma_client.get_collection(name=COLLECTION_NAME)
+        return collection
+    except Exception:
+        try:
+            collection = chroma_client.create_collection(
+                name=COLLECTION_NAME, metadata={"hnsw:space": "cosine"}
+            )
+            return collection
+        except Exception as e:
+            logger.error(f"Gagal mengambil/membuat koleksi: {e}")
+            return None
 
 
 # =====================================================================
@@ -207,6 +303,7 @@ app = FastAPI(
     description="REST API untuk pencarian arsip semantik, reranking, dan manajemen dokumen ChromaDB.",
     version="1.0.0",
     lifespan=lifespan,
+    dependencies=[Depends(verify_api_key)],
 )
 
 app.add_middleware(
@@ -242,8 +339,9 @@ async def health_check():
     """Endpoint untuk monitoring kesehatan service, model AI, dan database."""
     try:
         model_ok = ml_models.get("minilm") is not None
-        db_ok = collection is not None
-        db_count = collection.count() if db_ok else 0
+        active_col = get_active_collection()
+        db_ok = active_col is not None
+        db_count = active_col.count() if db_ok else 0
 
         status = "healthy" if (model_ok and db_ok) else "degraded"
 
@@ -279,7 +377,8 @@ async def search_endpoint(request: SearchRequest, http_request: Request):
             logger.error("Model not loaded")
             raise ModelNotLoadedError("AI model not loaded during startup")
 
-        if collection is None:
+        active_col = get_active_collection()
+        if active_col is None:
             logger.error("Database not connected")
             raise DatabaseNotConnectedError("ChromaDB connection failed")
 
@@ -300,7 +399,7 @@ async def search_endpoint(request: SearchRequest, http_request: Request):
 
         candidate_count = max(20, request.top_k * 4)
         try:
-            results = collection.query(
+            results = active_col.query(
                 query_embeddings=[query_vector],
                 n_results=candidate_count,
                 include=["metadatas", "distances", "documents"],
@@ -320,9 +419,10 @@ async def search_endpoint(request: SearchRequest, http_request: Request):
             final_results = reranker.rerank(query=request.query, chroma_results=results, top_k=request.top_k)
 
             for doc in final_results:
-                doc_id = doc.get("id", "unknown")
-                fname = doc.get("file_name", "")
-                doc["download_url"] = _build_file_url(http_request, fname)
+                doc_id = doc.get("uuid") or doc.get("id", "unknown")
+                doc["uuid"] = doc_id
+                doc.pop("id", None)
+                doc.pop("download_url", None)
 
                 if len(doc.get("snippet", "")) > 200:
                     doc["snippet"] = doc["snippet"][:200] + "..."
@@ -339,21 +439,25 @@ async def search_endpoint(request: SearchRequest, http_request: Request):
             if results.get("metadatas") and results["metadatas"][0]:
                 for i, meta in enumerate(results["metadatas"][0]):
                     score = 1 - results["distances"][0][i]
-                    doc_id = results["ids"][0][i] if "ids" in results else "unknown"
+                    raw_id = results["ids"][0][i] if "ids" in results else "unknown"
+                    doc_uuid = meta.get("uuid") or raw_id
                     fname = meta.get("file_name", "")
 
-                    real_full_text = full_docs_map.get(doc_id, meta.get("content_only", ""))
+                    real_full_text = full_docs_map.get(raw_id, meta.get("content_only", ""))
 
-                    final_results.append({
-                        "id": doc_id,
+                    doc_item = dict(meta) if meta else {}
+                    doc_item.update({
+                        "uuid": doc_uuid,
                         "score": round(score, 4),
                         "title": meta.get("title", "Tanpa Judul"),
                         "snippet": meta.get("snippet", ""),
                         "content_only": real_full_text,
                         "document_asli": real_full_text,
                         "file_name": fname,
-                        "download_url": _build_file_url(http_request, fname),
                     })
+                    doc_item.pop("id", None)
+                    doc_item.pop("download_url", None)
+                    final_results.append(doc_item)
                 final_results = final_results[: request.top_k]
 
         duration = time.perf_counter() - start_time
@@ -389,12 +493,13 @@ async def list_documents_endpoint(
     offset: int = Query(0, ge=0, description="Offset dokumen"),
 ):
     """Mendapatkan daftar seluruh dokumen yang tersimpan di ChromaDB dengan pagination."""
-    if collection is None:
+    active_col = get_active_collection()
+    if active_col is None:
         raise HTTPException(status_code=503, detail="Database belum terhubung")
 
     try:
-        total_count = collection.count()
-        data = collection.get(
+        total_count = active_col.count()
+        data = active_col.get(
             limit=limit,
             offset=offset,
             include=["metadatas", "documents"],
@@ -432,11 +537,12 @@ async def get_document_endpoint(
     doc_id: str = Path(..., description="ID Dokumen yang dicari"),
 ):
     """Mendapatkan detail satu dokumen berdasarkan ID."""
-    if collection is None:
+    active_col = get_active_collection()
+    if active_col is None:
         raise HTTPException(status_code=503, detail="Database belum terhubung")
 
     try:
-        data = collection.get(ids=[doc_id], include=["metadatas", "documents"])
+        data = active_col.get(ids=[doc_id], include=["metadatas", "documents"])
         if not data.get("ids") or len(data["ids"]) == 0:
             raise HTTPException(status_code=404, detail=f"Dokumen dengan ID '{doc_id}' tidak ditemukan")
 
@@ -480,7 +586,8 @@ async def upload_endpoint(
         if not model:
             logger.error("Model not loaded for upload")
             raise ModelNotLoadedError("AI model not loaded")
-        if collection is None:
+        active_col = get_active_collection()
+        if active_col is None:
             logger.error("Database not connected for upload")
             raise DatabaseNotConnectedError("Database not connected")
 
@@ -511,7 +618,7 @@ async def upload_endpoint(
         doc_id = f"upload_{int(time.time())}"
 
         logger.debug(f"Adding document to ChromaDB: {doc_id}")
-        collection.add(
+        active_col.add(
             ids=[doc_id],
             embeddings=[vector],
             documents=[full_text_to_embed],
@@ -570,7 +677,8 @@ async def upload_jsonl_endpoint(
     if not model:
         logger.error("Model not loaded for jsonl upload")
         raise ModelNotLoadedError("AI model not loaded")
-    if collection is None:
+    active_col = get_active_collection()
+    if active_col is None:
         logger.error("Database not connected for jsonl upload")
         raise DatabaseNotConnectedError("Database not connected")
 
@@ -638,7 +746,7 @@ async def upload_jsonl_endpoint(
             raise HTTPException(status_code=400, detail="Tidak ada data dokumen valid yang ditemukan dalam file .jsonl.")
 
         logger.info(f"Memulai proses batch upload untuk {len(items_to_upload)} dokumen JSONL...")
-        uploader = create_batch_uploader(model, collection)
+        uploader = create_batch_uploader(model, active_col)
         result = uploader.upload_batch(items_to_upload, skip_existing=False)
 
         if result.success > 0:
@@ -652,7 +760,7 @@ async def upload_jsonl_endpoint(
         return {
             "status": "success",
             "message": f"Upload JSONL selesai. {result.success} dokumen berhasil di-index, {result.failed} gagal.",
-            "total_documents": collection.count(),
+            "total_documents": active_col.count(),
             "summary": result.to_dict(),
         }
 
@@ -671,14 +779,15 @@ async def update_document_endpoint(
 ):
     """Memperbarui judul, konten, atau kata kunci dokumen dan otomatis meng-update vektor embedding-nya."""
     _check_rate_limit(http_request, "upload")
-    if collection is None:
+    active_col = get_active_collection()
+    if active_col is None:
         raise HTTPException(status_code=503, detail="Database belum terhubung")
     model = ml_models.get("minilm")
     if not model:
         raise HTTPException(status_code=503, detail="AI model belum dimuat")
 
     try:
-        existing = collection.get(ids=[doc_id], include=["metadatas", "documents"])
+        existing = active_col.get(ids=[doc_id], include=["metadatas", "documents"])
         if not existing.get("ids") or len(existing["ids"]) == 0:
             raise HTTPException(status_code=404, detail=f"Dokumen dengan ID '{doc_id}' tidak ditemukan")
 
@@ -709,7 +818,7 @@ async def update_document_endpoint(
             "keywords": new_keywords,
         }
 
-        collection.update(
+        active_col.update(
             ids=[doc_id],
             embeddings=[new_vector],
             documents=[new_text_to_embed],
@@ -746,16 +855,17 @@ async def delete_document_endpoint(
     _check_rate_limit(http_request, "delete")
     logger.debug(f"Delete request for document: {doc_id}")
 
-    if collection is None:
+    active_col = get_active_collection()
+    if active_col is None:
         logger.error("Database not connected for delete")
         raise HTTPException(status_code=503, detail="Database belum terhubung")
 
     try:
-        existing = collection.get(ids=[doc_id])
+        existing = active_col.get(ids=[doc_id])
         if not existing["ids"]:
             raise HTTPException(status_code=404, detail=f"Dokumen dengan ID '{doc_id}' tidak ditemukan.")
 
-        collection.delete(ids=[doc_id])
+        active_col.delete(ids=[doc_id])
         logger.info(f"Document deleted successfully: {doc_id}")
 
         try:

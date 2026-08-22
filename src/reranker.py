@@ -120,15 +120,18 @@ class ArsirReranker:
                     final_hybrid_score -= penalty
                     final_hybrid_score = max(0.0, final_hybrid_score)
 
-            reranked_list.append({
-                "id": ids[i],
+            doc_item = dict(metadatas[i]) if metadatas[i] else {}
+            doc_uuid = metadatas[i].get('uuid') or ids[i]
+            doc_item.update({
+                "uuid": doc_uuid,
                 "score": final_hybrid_score,
                 "title": metadatas[i].get('title', 'Tanpa Judul'),
-
                 "snippet": metadatas[i].get('snippet', ''),
                 "file_name": metadatas[i].get('file_name', '-'),
-                "download_url": metadatas[i].get('download_url', '')
             })
+            doc_item.pop("id", None)
+            doc_item.pop("download_url", None)
+            reranked_list.append(doc_item)
 
         reranked_list.sort(key=lambda x: x["score"], reverse=True)
 

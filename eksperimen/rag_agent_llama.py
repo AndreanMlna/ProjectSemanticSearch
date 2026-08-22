@@ -244,10 +244,12 @@ def search_tool(
     # --- Jalur Fallback HTTP API ---
     try:
         t_http_start = time.perf_counter()
-        search_api_url = "http://localhost:8000/search"
+        search_api_url = os.getenv("API_URL", "http://localhost:8000/search")
+        api_key = os.getenv("API_SECRET_KEY", "seranah_secret_key_2026")
         response = requests.post(
             search_api_url,
             json={"query": cleaned_query, "question": cleaned_query, "top_k": top_k},
+            headers={"X-API-Key": api_key},
             timeout=10
         )
         response.raise_for_status()
@@ -259,7 +261,7 @@ def search_tool(
         results = []
         for item in data.get("data", []):
             results.append(SearchResult(
-                doc_id=item.get("id", ""),
+                doc_id=item.get("uuid") or item.get("id", ""),
                 title=item.get("title", ""),
                 snippet=item.get("snippet", ""),
                 content_only=item.get("content_only", ""),
