@@ -5,7 +5,7 @@ Menyimpan hasil pencarian semantik untuk menghindari re-encoding query yang sama
 Strategi:
 - Cache key: hash dari (query_string + top_k) → unik per permintaan
 - Cache value: hasil search lengkap dari ChromaDB
-- TTL: configurable (default 60 menit dari config.yaml)
+- TTL: configurable (default 60 menit)
 - Eviction: LRU (Least Recently Used) saat cache penuh
 """
 
@@ -14,6 +14,7 @@ import time
 import logging
 from typing import Optional, Dict, Any
 from collections import OrderedDict
+from src.config import CACHE_MAX_SIZE, CACHE_TTL_MINUTES
 
 logger = logging.getLogger("cache_manager")
 
@@ -60,7 +61,7 @@ class SearchCacheManager:
 
     Menggunakan LRU (OrderedDict) untuk eviction saat cache penuh.
     Cache key dibuat dari hash query + top_k sehingga:
-    - "surat keputusan" top_k=5 ≠ "surat keputusan" top_k=10
+    - "surat keputusan" top_k=5 != "surat keputusan" top_k=10
     - Query yang sama persis akan mendapat hasil dari cache
 
     Contoh pemakaian:
@@ -76,8 +77,8 @@ class SearchCacheManager:
     def __init__(self, max_size: int = 500, ttl_minutes: int = 60):
         """
         Args:
-            max_size: Maksimal jumlah entry dalam cache (default 500 dari config.yaml)
-            ttl_minutes: Lama cache valid dalam menit (default 60 dari config.yaml)
+            max_size: Maksimal jumlah entry dalam cache (default 500)
+            ttl_minutes: Lama cache valid dalam menit (default 60)
         """
         self.max_size = max_size
         self.ttl_seconds = ttl_minutes * 60
@@ -92,7 +93,7 @@ class SearchCacheManager:
             f"SearchCacheManager initialized: max_size={max_size}, ttl={ttl_minutes}min"
         )
 
-    # ── Key Generation ──────────────────────────────────────────────
+    # ── Key Generation ───────────────────────────────────────────────
 
     @staticmethod
     def _make_key(query: str, top_k: int) -> str:
@@ -112,7 +113,7 @@ class SearchCacheManager:
         normalized = f"{query.lower().strip()}|{top_k}"
         return hashlib.md5(normalized.encode("utf-8")).hexdigest()
 
-    # ── Core Operations ─────────────────────────────────────────────
+    # ── Core Operations ──────────────────────────────────────────────
 
     def get(self, query: str, top_k: int) -> Optional[Dict[str, Any]]:
         """
@@ -285,7 +286,7 @@ class SearchCacheManager:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# SINGLETON — dipakai oleh main_api.py
+# SINGLETON — dipakai oleh main_api.py dan routers
 # ═══════════════════════════════════════════════════════════════════
 
 _cache_instance: Optional[SearchCacheManager] = None
@@ -294,48 +295,17 @@ _cache_instance: Optional[SearchCacheManager] = None
 def get_cache_manager() -> SearchCacheManager:
     """
     Ambil instance global SearchCacheManager (singleton).
-
-    Membaca konfigurasi dari config.yaml via ConfigManager jika tersedia,
-    fallback ke nilai default jika config tidak ada.
+    Membaca konfigurasi dari src.config / environment variables.
 
     Returns:
         SearchCacheManager instance
-
-    Contoh di main_api.py:
-        from src.cache_manager import get_cache_manager
-
-        cache = get_cache_manager()
-        cached_result = cache.get(query=request.query, top_k=request.top_k)
-        if cached_result:
-            return cached_result
-        # ... lakukan pencarian ...
-        cache.set(query=request.query, top_k=request.top_k, results=response)
     """
     global _cache_instance
 
     if _cache_instance is None:
-        # Coba baca config dari config.yaml
-        max_size = 500
-        ttl_minutes = 60
-
-        try:
-            from src.config_manager import get_config
-            cfg = get_config()
-            max_size = cfg.get("cache.max_size", 500)
-            ttl_minutes = cfg.get("cache.ttl_minutes", 60)
-            cache_enabled = cfg.get("cache.enabled", True)
-
-            if not cache_enabled:
-                logger.warning(
-                    "Cache disabled in config.yaml — "
-                    "SearchCacheManager still created but will not be used"
-                )
-        except Exception as e:
-            logger.warning(f"Could not load cache config, using defaults: {e}")
-
         _cache_instance = SearchCacheManager(
-            max_size=max_size,
-            ttl_minutes=ttl_minutes
+            max_size=CACHE_MAX_SIZE,
+            ttl_minutes=CACHE_TTL_MINUTES
         )
 
     return _cache_instance

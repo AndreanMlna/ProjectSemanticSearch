@@ -19,12 +19,15 @@ services:
     volumes:
       - ./.env:/app/.env
       - ./src:/app/src
+      - ./data:/app/data
+      - ./uploads:/app/uploads
       - hf_cache:/root/.cache/huggingface
     environment:
       - PYTHONUNBUFFERED=1
       # Konfigurasi koneksi Client-Server ke ChromaDB
       - CHROMA_HOST=chroma-server
       - CHROMA_PORT=8000
+      - SYNC_INTERVAL_HOURS=2
     depends_on:
       - chroma-server
     healthcheck:
@@ -46,6 +49,8 @@ services:
     volumes:
       - ./.env:/app/.env
       - ./src:/app/src
+      - ./data:/app/data
+      - ./uploads:/app/uploads
       - hf_cache:/root/.cache/huggingface
     depends_on:
       - api-skripsi
