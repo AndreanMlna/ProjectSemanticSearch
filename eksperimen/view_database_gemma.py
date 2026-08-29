@@ -73,6 +73,7 @@ except ImportError:
 @st.cache_resource(show_spinner=False)
 def load_cached_embedding_model(model_name: str):
     """Memuat model SentenceTransformer sekali ke memori cache."""
+    # pyrefly: ignore [missing-import]
     from sentence_transformers import SentenceTransformer
     return SentenceTransformer(model_name)
 
