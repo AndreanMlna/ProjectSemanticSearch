@@ -129,11 +129,11 @@ def clean_query_text(query: str) -> str:
 
 # ── 3. INISIALISASI LLM & RERANKER ─────────────────────────────────
 
-def get_llm_instance():
+def get_llm_instance(model_name: Optional[str] = None):
     """
     Mengembalikan instance LLM (Hybrid Cloud / Local):
     1. Jika GROQ_API_KEY disetel di st.secrets / environment (.env),
-       gunakan model Llama 3.3 70B / Llama 3.1 8B via Groq Cloud LPU ultra cepat (~500-1000 token/s).
+       gunakan model ultra cepat llama-3.1-8b-instant via Groq Cloud LPU (~1000 token/s).
     2. Jika tidak ada GROQ_API_KEY, gunakan backend Ollama lokal di laptop.
     """
     groq_key = os.getenv("GROQ_API_KEY", "").strip()
@@ -148,13 +148,14 @@ def get_llm_instance():
     if groq_key:
         try:
             from langchain_groq import ChatGroq
-            groq_model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
-            # Intercept model yang sudah didecommission oleh Groq
-            if groq_model in ["gemma2-9b-it", "gemma-7b-it", "llama3-70b-8192", "llama3-8b-8192", ""]:
-                groq_model = "llama-3.3-70b-versatile"
-            logger.info(f"[LLM] Menggunakan Groq Cloud LPU: model={groq_model}")
+            target_model = model_name or os.getenv("GROQ_MODEL", "llama-3.1-8b-instant").strip()
+            # Validasi model jika menggunakan nama yang sudah dideprecate
+            if target_model in ["gemma2-9b-it", "gemma-7b-it", "llama-3.3-70b-versatile", ""]:
+                target_model = "llama-3.1-8b-instant"
+            
+            logger.info(f"[LLM] Menggunakan Groq Cloud LPU: model={target_model}")
             return ChatGroq(
-                model=groq_model,
+                model=target_model,
                 groq_api_key=groq_key,
                 temperature=0.1,
             )
@@ -167,6 +168,7 @@ def get_llm_instance():
         base_url=OLLAMA_BASE_URL,
         temperature=0.1,
     )
+
 
 
 
@@ -261,8 +263,14 @@ def rewrite_query_node(state: AgentState) -> dict:
         response = llm.invoke(prompt)
         new_q = clean_query_text(response.content.strip())
     except Exception as e:
-        logger.warning(f"[LangGraph Rewrite Error] {e}")
-        new_q = old_query
+        logger.warning(f"[LangGraph Rewrite Warning] {e}. Mencoba fallback...")
+        try:
+            fallback_llm = get_llm_instance(model_name="llama-3.1-8b-instant")
+            response = fallback_llm.invoke(prompt)
+            new_q = clean_query_text(response.content.strip())
+        except Exception:
+            new_q = old_query
+
 
     llm_t = time.perf_counter() - t0
     logger.info(f"[LangGraph Rewrite] Iterasi #{current_retry + 1}: '{old_query}' -> '{new_q}'")
@@ -319,8 +327,14 @@ def generate_answer_node(state: AgentState) -> dict:
         response = llm.invoke(prompt)
         ans_text = response.content.strip()
     except Exception as e:
-        logger.error(f"[LangGraph Generate Error] {e}")
-        ans_text = f"Terjadi kesalahan saat memproses jawaban AI: {e}"
+        logger.warning(f"[LangGraph Generate Warning] Model utama gagal ({e}). Mencoba fallback ke llama-3.1-8b-instant...")
+        try:
+            fallback_llm = get_llm_instance(model_name="llama-3.1-8b-instant")
+            response = fallback_llm.invoke(prompt)
+            ans_text = response.content.strip()
+        except Exception as e2:
+            logger.error(f"[LangGraph Generate Error] {e2}")
+            ans_text = f"Terjadi kesalahan saat memproses jawaban AI: {e2}"
 
     llm_t = time.perf_counter() - t0
 
@@ -328,6 +342,7 @@ def generate_answer_node(state: AgentState) -> dict:
         "answer": ans_text,
         "llm_time": state.get("llm_time", 0.0) + llm_t,
     }
+
 
 
 # ── 5. MEMBANGUN STATEGRAPH ─────────────────────────────────────────
