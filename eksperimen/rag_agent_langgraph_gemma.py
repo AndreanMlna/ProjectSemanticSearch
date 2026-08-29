@@ -133,7 +133,7 @@ def get_llm_instance():
     """
     Mengembalikan instance LLM (Hybrid Cloud / Local):
     1. Jika GROQ_API_KEY disetel di st.secrets / environment (.env),
-       gunakan model Gemma 2 / Llama 3 via Groq Cloud LPU ultra cepat (~500 token/s).
+       gunakan model Llama 3.3 70B / Llama 3.1 8B via Groq Cloud LPU ultra cepat (~500-1000 token/s).
     2. Jika tidak ada GROQ_API_KEY, gunakan backend Ollama lokal di laptop.
     """
     groq_key = os.getenv("GROQ_API_KEY", "").strip()
@@ -148,7 +148,10 @@ def get_llm_instance():
     if groq_key:
         try:
             from langchain_groq import ChatGroq
-            groq_model = os.getenv("GROQ_MODEL", "gemma2-9b-it")
+            groq_model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
+            # Intercept model yang sudah didecommission oleh Groq
+            if groq_model in ["gemma2-9b-it", "gemma-7b-it", "llama3-70b-8192", "llama3-8b-8192", ""]:
+                groq_model = "llama-3.3-70b-versatile"
             logger.info(f"[LLM] Menggunakan Groq Cloud LPU: model={groq_model}")
             return ChatGroq(
                 model=groq_model,
@@ -164,6 +167,7 @@ def get_llm_instance():
         base_url=OLLAMA_BASE_URL,
         temperature=0.1,
     )
+
 
 
 

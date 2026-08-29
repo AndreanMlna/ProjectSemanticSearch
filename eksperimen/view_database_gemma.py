@@ -252,7 +252,7 @@ with st.sidebar:
         </div>
         <div style="display: flex; justify-content: space-between;">
             <span style="color: #94A3B8;">AI Model</span>
-            <span style="color: #d0bcff;">Gemma 2</span>
+            <span style="color: #d0bcff;">Llama 3.3 70B / Gemma</span>
         </div>
         <div style="display: flex; justify-content: space-between;">
             <span style="color: #94A3B8;">Engine</span>
