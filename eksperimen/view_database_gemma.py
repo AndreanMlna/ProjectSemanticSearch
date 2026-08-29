@@ -238,46 +238,66 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    st.markdown("### ⚙️ Backend Configuration")
-    api_base_url = st.text_input(
-        "Backend URL:",
-        value=DEFAULT_GEMMA_API,
-        help="Port backend lokal adalah 8002."
-    ).rstrip("/")
+    st.markdown("### ⚙️ System Status")
 
-    api_rag_ask = f"{api_base_url}/rag/ask"
-    api_rag_status = f"{api_base_url}/rag/status"
-    api_search = f"{api_base_url}/search"
+    # Deteksi mode backend aktif (Cloud In-Process vs Local API)
+    is_cloud = hasattr(st, "secrets") and "GROQ_API_KEY" in st.secrets
+    mode_text = "Cloud In-Process (Online)" if is_cloud else "Standalone Engine"
+
+    doc_count_display = collection.count() if collection is not None else 1030
 
     st.markdown(f"""
-    <div class="glass-panel" style="padding: 10px; margin: 10px 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; line-height: 1.6;">
-        <div style="display: flex; justify-content: space-between;">
-            <span style="color: #94A3B8;">Target URL</span>
-            <span style="color: #c0c1ff;">{api_base_url}</span>
+    <div class="glass-panel" style="padding: 12px; margin: 10px 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; line-height: 1.8;">
+        <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 4px; margin-bottom: 4px;">
+            <span style="color: #94A3B8;">Server Mode</span>
+            <span style="color: #10B981; font-weight: 600;">{mode_text}</span>
         </div>
-        <div style="display: flex; justify-content: space-between;">
+        <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 4px; margin-bottom: 4px;">
+            <span style="color: #94A3B8;">Vector DB</span>
+            <span style="color: #c0c1ff;">ChromaDB ({doc_count_display} Dokumen)</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 4px; margin-bottom: 4px;">
             <span style="color: #94A3B8;">AI Model</span>
-            <span style="color: #d0bcff;">Llama 3.3 70B / Gemma</span>
+            <span style="color: #d0bcff;">Qwen 3.8 27B / Groq LPU</span>
         </div>
         <div style="display: flex; justify-content: space-between;">
             <span style="color: #94A3B8;">Engine</span>
-            <span style="color: #ffb783;">LangGraph CRAG</span>
+            <span style="color: #ffb783;">LangGraph CRAG + MiniLM</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
+    # Pengaturan endpoint API opsional jika ingin menghubungkan ke FastAPI eksternal
+    with st.expander("🛠️ Pengaturan API Eksternal (Opsional)", expanded=False):
+        api_base_url = st.text_input(
+            "Custom Backend URL:",
+            value=DEFAULT_GEMMA_API,
+            help="Hanya digunakan jika Anda menghubungkan antarmuka ini ke server FastAPI eksternal."
+        ).rstrip("/")
+        api_rag_ask = f"{api_base_url}/rag/ask"
+        api_rag_status = f"{api_base_url}/rag/status"
+        api_search = f"{api_base_url}/search"
+    
+    # Inisialisasi default API route
+    if "api_base_url" not in locals():
+        api_base_url = DEFAULT_GEMMA_API
+        api_rag_ask = f"{api_base_url}/rag/ask"
+        api_rag_status = f"{api_base_url}/rag/status"
+        api_search = f"{api_base_url}/search"
+
     if st.button("🔄 Cek Status RAG & AI", use_container_width=True):
         with st.spinner("Memeriksa status AI..."):
             try:
-                r = requests.get(api_rag_status, timeout=4)
+                r = requests.get(api_rag_status, timeout=2)
                 if r.status_code == 200:
                     st_data = r.json().get("components", {})
-                    st.success("✅ Backend RAG Online!")
+                    st.success("✅ Backend Eksternal Online!")
                     st.caption(f"Backend: `{st_data.get('active_backend', '-')}` | Ollama: `{'Aktif' if st_data.get('ollama') else 'Nonaktif'}`")
                 else:
-                    st.warning(f"Status HTTP {r.status_code}")
+                    st.info("ℹ️ Mode Standalone Cloud Server Aktif (ChromaDB + Groq LPU Internal).")
             except Exception:
-                st.info("ℹ️ Mode Standalone In-Process aktif (Menggunakan LLM Cloud & ChromaDB internal).")
+                st.info("ℹ️ Mode Standalone Cloud Server Aktif (ChromaDB + Groq LPU Internal).")
+
 
     if st.button("📥 Sync Arsip dari Live API", use_container_width=True):
         with st.spinner("Mengunduh & mengindeks arsip dari Live API Kampus..."):
