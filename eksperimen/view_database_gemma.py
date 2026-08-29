@@ -271,7 +271,23 @@ with st.sidebar:
             except Exception:
                 st.info("ℹ️ Mode Standalone In-Process aktif (Menggunakan LLM Cloud & ChromaDB internal).")
 
+    if st.button("📥 Sync Arsip dari Live API", use_container_width=True):
+        with st.spinner("Mengunduh & mengindeks arsip dari Live API Kampus..."):
+            try:
+                from src.sync_seranah_archives import sync_seranah_to_chromadb
+                _embed_model = load_cached_embedding_model(MODEL_PATH)
+                _ok, _msg, _cnt = sync_seranah_to_chromadb(_embed_model, collection)
+                if _ok:
+                    st.success(f"✅ Berhasil sinkronisasi {_cnt} dokumen ke ChromaDB!")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error(f"Gagal: {_msg}")
+            except Exception as e:
+                st.error(f"Error sinkronisasi: {e}")
+
     st.divider()
+
 
     st.markdown("### ➕ Upload Archive")
     with st.form("sidebar_upload_form", clear_on_submit=True):

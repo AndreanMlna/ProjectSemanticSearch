@@ -132,11 +132,19 @@ def clean_query_text(query: str) -> str:
 def get_llm_instance():
     """
     Mengembalikan instance LLM (Hybrid Cloud / Local):
-    1. Jika GROQ_API_KEY disetel di environment / Hugging Face Secrets,
+    1. Jika GROQ_API_KEY disetel di st.secrets / environment (.env),
        gunakan model Gemma 2 / Llama 3 via Groq Cloud LPU ultra cepat (~500 token/s).
     2. Jika tidak ada GROQ_API_KEY, gunakan backend Ollama lokal di laptop.
     """
     groq_key = os.getenv("GROQ_API_KEY", "").strip()
+    if not groq_key:
+        try:
+            import streamlit as st
+            if hasattr(st, "secrets") and "GROQ_API_KEY" in st.secrets:
+                groq_key = str(st.secrets["GROQ_API_KEY"]).strip()
+        except Exception:
+            pass
+
     if groq_key:
         try:
             from langchain_groq import ChatGroq
@@ -156,6 +164,7 @@ def get_llm_instance():
         base_url=OLLAMA_BASE_URL,
         temperature=0.1,
     )
+
 
 
 
