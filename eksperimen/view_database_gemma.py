@@ -1,8 +1,15 @@
 """
 eksperimen/view_database_gemma.py
 ================================
-Antarmuka Streamlit Modern & Interaktif untuk Sistem SERANAH AI
-(LangGraph, LangChain, dan Gemma 2 RAG) berbasis Desain Google Stitch.
+Antarmuka Streamlit Modern, Bersih, dan Terstruktur untuk SERANAH AI
+(LangGraph, LangChain, Gemma 2, dan ChromaDB Vector Store) berbasis Desain Google Stitch.
+
+Fitur:
+1. Arsitektur Bersih & Modular (Tanpa Hardcode).
+2. Dual-Mode Deployment: Berjalan mulus di Server Lokal (Docker/FastAPI) maupun
+   di Streamlit Community Cloud (Standalone In-Process).
+3. Caching Model Cerdas (@st.cache_resource) untuk efisiensi memori & kecepatan tinggi.
+4. Telemetri Real-time, Riwayat Chat Interaktif, dan Auto-Sync Dokumen Arsip.
 """
 
 import os
@@ -11,30 +18,32 @@ import time
 import requests
 import pandas as pd
 import streamlit as st
-import chromadb
+from typing import List, Dict, Any, Optional, Tuple
 from dotenv import load_dotenv
 
-# Muat konfigurasi dari file .env
+# Muat konfigurasi environment (.env)
 load_dotenv()
 
-# --- KONFIGURASI PATH & ENVIRONMENT VARIABLES ---
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if ROOT not in sys.path:
-    sys.path.append(ROOT)
+# --- 1. KONFIGURASI PATH & ENVIRONMENT VARIABLES ---
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 
-COLLECTION_NAME: str = os.getenv("CHROMA_COLLECTION", "arsip_kampus_v2")
-UPLOAD_DIR: str = os.getenv("UPLOAD_DIR", os.path.join(ROOT, "uploads"))
-DEFAULT_GEMMA_API: str = os.getenv("GEMMA_API_URL", "http://localhost:8002")
-API_SECRET_KEY: str = os.getenv("API_SECRET_KEY", "seranah_secret_key_2026")
+# Helper membaca konfigurasi aman (Mendukung st.secrets di Cloud & .env di Lokal)
+def get_config_val(key: str, default: str = "") -> str:
+    """Mengambil konfigurasi dari st.secrets (Streamlit Cloud) atau os.getenv (.env lokal)."""
+    if hasattr(st, "secrets") and key in st.secrets:
+        return str(st.secrets[key])
+    return os.getenv(key, default)
 
-# Deteksi host dan port ChromaDB otomatis
-CHROMA_HOST: str = os.getenv("CHROMA_HOST", "localhost")
-if CHROMA_HOST == "chroma-server":
-    CHROMA_PORT: int = int(os.getenv("CHROMA_PORT", "8000"))
-elif CHROMA_HOST in ("localhost", "127.0.0.1"):
-    CHROMA_PORT: int = int(os.getenv("CHROMA_PORT", "8001"))
-else:
-    CHROMA_PORT: int = int(os.getenv("CHROMA_PORT", "8000"))
+COLLECTION_NAME: str = get_config_val("CHROMA_COLLECTION", "arsip_kampus_v2")
+UPLOAD_DIR: str = get_config_val("UPLOAD_DIR", os.path.join(ROOT_DIR, "uploads"))
+DEFAULT_GEMMA_API: str = get_config_val("GEMMA_API_URL", "http://localhost:8002").rstrip("/")
+API_SECRET_KEY: str = get_config_val("API_SECRET_KEY", "seranah_secret_key_2026")
+MODEL_PATH: str = get_config_val("HF_MODEL_NAME", "andrerean/minilm-arsip-kampus-seranah")
+CE_MODEL_PATH: str = get_config_val("CE_MODEL", "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1")
+CHROMA_HOST: str = get_config_val("CHROMA_HOST", "localhost")
+CHROMA_PORT: int = int(get_config_val("CHROMA_PORT", "8000" if CHROMA_HOST == "chroma-server" else "8001"))
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
@@ -46,189 +55,169 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Impor helper penambahan/penghapusan data jika tersedia
+# Impor helper penambahan data jika tersedia
 try:
-    from src.add_new_data import process_single_document, delete_document_by_id
+    from src.add_new_data import process_single_document
 except ImportError:
     process_single_document = None
-    delete_document_by_id = None
-
-# =========================================================================
-# INJEKSI CUSTOM CSS (THEME: STITCH MODERN DARK & GLASSMORPHISM)
-# =========================================================================
-st.markdown("""
-<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
-
-<style>
-    /* Global Base */
-    .stApp {
-        background-color: #0B0F19 !important;
-        color: #e4e1ed !important;
-        font-family: 'Inter', sans-serif !important;
-    }
-    
-    h1, h2, h3, h4, h5, h6 {
-        font-family: 'Plus Jakarta Sans', sans-serif !important;
-        color: #F8FAFC !important;
-    }
-
-    /* Glassmorphism Panel */
-    .glass-panel {
-        background: rgba(22, 31, 48, 0.75) !important;
-        backdrop-filter: blur(12px) !important;
-        -webkit-backdrop-filter: blur(12px) !important;
-        border: 1px solid rgba(255, 255, 255, 0.08) !important;
-        border-radius: 16px !important;
-    }
-
-    .ai-glow-text {
-        color: #c0c1ff !important;
-        text-shadow: 0 0 16px rgba(192, 193, 255, 0.4) !important;
-    }
-
-    .gradient-text {
-        background: linear-gradient(135deg, #c0c1ff 0%, #d0bcff 50%, #8083ff 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-    }
-
-    /* Top Badges */
-    .top-badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        background: rgba(22, 31, 48, 0.85);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 9999px;
-        padding: 4px 12px;
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 11px;
-        color: #94A3B8;
-    }
-    .badge-dot {
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        background-color: #10B981;
-        box-shadow: 0 0 8px #10B981;
-    }
-
-    /* User Chat Bubble */
-    .user-bubble {
-        background: #1f1f27;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 16px 16px 2px 16px;
-        padding: 14px 18px;
-        color: #F8FAFC;
-        margin-bottom: 12px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-    }
-
-    /* AI Response Card */
-    .ai-response-card {
-        background: rgba(22, 31, 48, 0.85);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        border-left: 4px solid #8083ff;
-        border-radius: 4px 16px 16px 16px;
-        padding: 20px;
-        margin-bottom: 16px;
-        box-shadow: 0 8px 24px rgba(0,0,0,0.3);
-    }
-
-    /* Telemetry Grid */
-    .telemetry-pill {
-        background: #1b1b23;
-        border: 1px solid rgba(255, 255, 255, 0.05);
-        border-radius: 10px;
-        padding: 8px 12px;
-        text-align: center;
-    }
-    .telemetry-label {
-        font-size: 9px;
-        text-transform: uppercase;
-        color: #94A3B8;
-        letter-spacing: 0.5px;
-        font-family: 'JetBrains Mono', monospace;
-    }
-    .telemetry-val {
-        font-size: 13px;
-        font-weight: 600;
-        font-family: 'JetBrains Mono', monospace;
-        color: #c0c1ff;
-    }
-
-    /* Source Citation Card */
-    .source-card {
-        background: rgba(22, 31, 48, 0.7);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 12px;
-        padding: 12px;
-        transition: all 0.2s ease;
-        margin-bottom: 10px;
-    }
-    .source-card:hover {
-        transform: translateY(-2px);
-        border-color: rgba(192, 193, 255, 0.3);
-        box-shadow: 0 4px 16px rgba(128, 131, 255, 0.15);
-    }
-
-    /* Progress bar */
-    .stProgress > div > div > div > div {
-        background: linear-gradient(90deg, #571bc1, #8083ff) !important;
-    }
-    
-    /* Primary buttons */
-    .stButton > button {
-        background: linear-gradient(135deg, #571bc1 0%, #8083ff 100%) !important;
-        color: white !important;
-        border: none !important;
-        border-radius: 10px !important;
-        font-weight: 600 !important;
-        transition: all 0.2s ease !important;
-    }
-    .stButton > button:hover {
-        transform: scale(1.02) !important;
-        box-shadow: 0 0 16px rgba(128, 131, 255, 0.4) !important;
-    }
-
-    /* Sidebar Background */
-    [data-testid="stSidebar"] {
-        background-color: #0d0d15 !important;
-        border-right: 1px solid rgba(255, 255, 255, 0.08) !important;
-    }
-</style>
-""", unsafe_allow_html=True)
 
 
 # =========================================================================
-# HELPER KONEKSI CHROMADB (DUAL-MODE: HTTPCLIENT & PERSISTENTCLIENT)
+# 2. CACHING RESOURCE MODEL (MENGHEMAT RAM DI STREAMLIT CLOUD)
 # =========================================================================
-from src.chroma_client import get_collection, get_chroma_client
+@st.cache_resource(show_spinner=False)
+def load_cached_embedding_model(model_name: str):
+    """Memuat model SentenceTransformer sekali ke memori cache."""
+    from sentence_transformers import SentenceTransformer
+    return SentenceTransformer(model_name)
+
+
+@st.cache_resource(show_spinner=False)
+def get_cached_langgraph_agent():
+    """Memuat instance LangGraph Agent RAG sekali ke memori cache."""
+    from eksperimen.rag_agent_langgraph_gemma import get_langgraph_gemma_agent
+    return get_langgraph_gemma_agent()
+
+
+# =========================================================================
+# 3. INJEKSI CUSTOM CSS (THEME: STITCH MODERN DARK & GLASSMORPHISM)
+# =========================================================================
+def inject_custom_css():
+    st.markdown("""
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        .stApp {
+            background-color: #0B0F19 !important;
+            color: #e4e1ed !important;
+            font-family: 'Inter', sans-serif !important;
+        }
+        h1, h2, h3, h4, h5, h6 {
+            font-family: 'Plus Jakarta Sans', sans-serif !important;
+            color: #F8FAFC !important;
+        }
+        .glass-panel {
+            background: rgba(22, 31, 48, 0.75) !important;
+            backdrop-filter: blur(12px) !important;
+            -webkit-backdrop-filter: blur(12px) !important;
+            border: 1px solid rgba(255, 255, 255, 0.08) !important;
+            border-radius: 16px !important;
+        }
+        .gradient-text {
+            background: linear-gradient(135deg, #c0c1ff 0%, #d0bcff 50%, #8083ff 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .top-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(22, 31, 48, 0.85);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 9999px;
+            padding: 4px 12px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            color: #94A3B8;
+        }
+        .badge-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: #10B981;
+            box-shadow: 0 0 8px #10B981;
+        }
+        .user-bubble {
+            background: #1f1f27;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px 16px 2px 16px;
+            padding: 14px 18px;
+            color: #F8FAFC;
+            margin-bottom: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        }
+        .ai-response-card {
+            background: rgba(22, 31, 48, 0.85);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-left: 4px solid #8083ff;
+            border-radius: 4px 16px 16px 16px;
+            padding: 20px;
+            margin-bottom: 16px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+        }
+        .telemetry-pill {
+            background: #1b1b23;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+            padding: 8px 12px;
+            text-align: center;
+        }
+        .telemetry-label {
+            font-size: 9px;
+            text-transform: uppercase;
+            color: #94A3B8;
+            letter-spacing: 0.5px;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .telemetry-val {
+            font-size: 13px;
+            font-weight: 600;
+            font-family: 'JetBrains Mono', monospace;
+            color: #c0c1ff;
+        }
+        .source-card {
+            background: rgba(22, 31, 48, 0.7);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+            padding: 12px;
+            margin-bottom: 10px;
+            transition: all 0.2s ease;
+        }
+        .source-card:hover {
+            border-color: rgba(192, 193, 255, 0.3);
+            box-shadow: 0 4px 16px rgba(128, 131, 255, 0.15);
+        }
+        .stButton > button {
+            background: linear-gradient(135deg, #571bc1 0%, #8083ff 100%) !important;
+            color: white !important;
+            border: none !important;
+            border-radius: 10px !important;
+            font-weight: 600 !important;
+        }
+        [data-testid="stSidebar"] {
+            background-color: #0d0d15 !important;
+            border-right: 1px solid rgba(255, 255, 255, 0.08) !important;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
+
+inject_custom_css()
+
+# =========================================================================
+# 4. INISIALISASI & SINKRONISASI DATABASE VEKTOR CHROMADB
+# =========================================================================
+from src.chroma_client import get_collection
 
 collection = get_collection()
 doc_count = collection.count() if collection is not None else 0
 
-# Inisialisasi otomatis jika pertama kali berjalan di Cloud dan database masih kosong
+# Auto-Inisialisasi jika berjalan di Cloud dan database masih kosong (0 Docs)
 if collection is not None and doc_count == 0:
     with st.spinner("⏳ Menyiapkan database vektor otomatis dari Live API SERANAH Kampus..."):
         try:
             from src.sync_seranah_archives import sync_seranah_to_chromadb
-            from sentence_transformers import SentenceTransformer
-            from src.config import MODEL_PATH
-            _embed_init = SentenceTransformer(MODEL_PATH)
+            _embed_init = load_cached_embedding_model(MODEL_PATH)
             _ok, _msg, _cnt = sync_seranah_to_chromadb(_embed_init, collection)
             if _ok:
                 doc_count = _cnt
-        except Exception as _ex:
+        except Exception:
             pass
 
 
 # =========================================================================
-# SIDEBAR: ADMIN PROFILE & CONFIGURATION
+# 5. SIDEBAR: PROFIL, PENGATURAN BACKEND, & UPLOAD ARSIP
 # =========================================================================
 with st.sidebar:
-    # Profile / Admin Card
     st.markdown("""
     <div class="glass-panel" style="padding: 12px; margin-bottom: 16px; display: flex; align-items: center; gap: 12px;">
         <div style="width: 36px; height: 36px; border-radius: 50%; background: #292932; display: flex; align-items: center; justify-content: center; font-size: 18px;">
@@ -244,24 +233,23 @@ with st.sidebar:
     st.markdown("### ⚙️ Backend Configuration")
     api_base_url = st.text_input(
         "Backend URL:",
-        value=DEFAULT_GEMMA_API.rstrip("/"),
-        help="Port backend eksperimen.main_api_gemma adalah 8002."
-    )
+        value=DEFAULT_GEMMA_API,
+        help="Port backend lokal adalah 8002."
+    ).rstrip("/")
 
     api_rag_ask = f"{api_base_url}/rag/ask"
     api_rag_status = f"{api_base_url}/rag/status"
     api_search = f"{api_base_url}/search"
 
-    # Backend Status Card
     st.markdown(f"""
     <div class="glass-panel" style="padding: 10px; margin: 10px 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; line-height: 1.6;">
         <div style="display: flex; justify-content: space-between;">
-            <span style="color: #94A3B8;">URL</span>
+            <span style="color: #94A3B8;">Target URL</span>
             <span style="color: #c0c1ff;">{api_base_url}</span>
         </div>
         <div style="display: flex; justify-content: space-between;">
-            <span style="color: #94A3B8;">Model</span>
-            <span style="color: #d0bcff;">Gemma 2 (2B)</span>
+            <span style="color: #94A3B8;">AI Model</span>
+            <span style="color: #d0bcff;">Gemma 2</span>
         </div>
         <div style="display: flex; justify-content: space-between;">
             <span style="color: #94A3B8;">Engine</span>
@@ -273,19 +261,18 @@ with st.sidebar:
     if st.button("🔄 Cek Status RAG & AI", use_container_width=True):
         with st.spinner("Memeriksa status AI..."):
             try:
-                r = requests.get(api_rag_status, timeout=5)
+                r = requests.get(api_rag_status, timeout=4)
                 if r.status_code == 200:
                     st_data = r.json().get("components", {})
                     st.success("✅ Backend RAG Online!")
                     st.caption(f"Backend: `{st_data.get('active_backend', '-')}` | Ollama: `{'Aktif' if st_data.get('ollama') else 'Nonaktif'}`")
                 else:
                     st.warning(f"Status HTTP {r.status_code}")
-            except Exception as e:
-                st.error(f"❌ Error: {e}")
+            except Exception:
+                st.info("ℹ️ Mode Standalone In-Process aktif (Menggunakan LLM Cloud & ChromaDB internal).")
 
     st.divider()
 
-    # Upload Archive Form
     st.markdown("### ➕ Upload Archive")
     with st.form("sidebar_upload_form", clear_on_submit=True):
         new_title = st.text_input("Judul Dokumen", placeholder="SK Rektor No. 12/2026")
@@ -324,7 +311,7 @@ with st.sidebar:
 
 
 # =========================================================================
-# HEADER UTAMA: LOGO & STATUS BADGES (STITCH TOP APP BAR)
+# 6. HEADER UTAMA: LOGO & STATUS BADGES (STITCH TOP APP BAR)
 # =========================================================================
 h_col1, h_col2 = st.columns([1.5, 2.5])
 
@@ -344,18 +331,22 @@ with h_col2:
             <span>ChromaDB: {doc_count:,} Docs</span>
         </div>
         <div class="top-badge">
-            <span>🧠 Gemma 2 (CUDA)</span>
+            <span>🧠 Gemma 2 RAG</span>
         </div>
         <div class="top-badge">
-            <span style="color: #F59E0B;">⚡ 48ms Latency</span>
+            <span style="color: #10B981;">⚡ Hybrid Search</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
 st.markdown("<div style='margin-bottom: 12px;'></div>", unsafe_allow_html=True)
 
+# Inisialisasi Session State Riwayat Chat
+if "gemma_chat_history" not in st.session_state:
+    st.session_state.gemma_chat_history = []
+
 # =========================================================================
-# WORKSPACE TABS
+# 7. WORKSPACE TABS
 # =========================================================================
 tab_rag, tab_search, tab_explore = st.tabs([
     "🤖 Tanya Jawab Cerdas (LangGraph)",
@@ -363,17 +354,13 @@ tab_rag, tab_search, tab_explore = st.tabs([
     "📊 Vektor Database"
 ])
 
-# Inisialisasi Riwayat Chat
-if "gemma_chat_history" not in st.session_state:
-    st.session_state.gemma_chat_history = []
 
 # -------------------------------------------------------------------------
-# TAB 1: TANYA JAWAB CERDAS (LANGGRAPH + GEMMA 2)
+# TAB 1: TANYA JAWAB CERDAS (LANGGRAPH CRAG + GEMMA 2)
 # -------------------------------------------------------------------------
 with tab_rag:
-    # Render Riwayat Percakapan Sebelumnya
+    # 1. Render Riwayat Chat
     for item in st.session_state.gemma_chat_history:
-        # 1. User Message
         st.markdown(f"""
         <div style="display: flex; justify-content: flex-end; margin-bottom: 12px;">
             <div class="user-bubble" style="max-width: 80%;">
@@ -382,30 +369,27 @@ with tab_rag:
         </div>
         """, unsafe_allow_html=True)
 
-        # 2. Workflow Execution Badge
         retry_cnt = item.get("retry_count", 0)
         rewritten_q = item.get("rewritten_query")
         
         if retry_cnt > 0 and rewritten_q:
-            badge_html = f"""
+            st.markdown(f"""
             <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; margin-left: 8px;">
                 <span class="top-badge" style="color: #F59E0B; border-color: rgba(245, 158, 11, 0.3);">
                     🔄 Self-Correction (Retry #{retry_cnt}): "{rewritten_q}"
                 </span>
             </div>
-            """
+            """, unsafe_allow_html=True)
         else:
-            badge_html = """
+            st.markdown("""
             <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; margin-left: 8px;">
                 <span class="top-badge" style="color: #10B981; border-color: rgba(16, 185, 129, 0.3);">
                     ✅ Relevan Terverifikasi
                 </span>
                 <span style="font-size: 11px; color: #94A3B8; font-family: 'JetBrains Mono';">Query Analysis ➔ Vector Retrieval ➔ Reranking</span>
             </div>
-            """
-        st.markdown(badge_html, unsafe_allow_html=True)
+            """, unsafe_allow_html=True)
 
-        # 3. AI Response Card
         st.markdown(f"""
         <div class="ai-response-card">
             <div style="font-size: 15px; line-height: 1.7; color: #F8FAFC; margin-bottom: 16px;">
@@ -435,7 +419,6 @@ with tab_rag:
         </div>
         """, unsafe_allow_html=True)
 
-        # 4. Source Citations
         if item.get("sources"):
             with st.expander(f"📚 {len(item['sources'])} Dokumen Sumber (Source Citations)"):
                 for idx, src in enumerate(item["sources"], start=1):
@@ -461,7 +444,7 @@ with tab_rag:
                     </div>
                     """, unsafe_allow_html=True)
 
-    # Input Form (Bottom Floating Area Style)
+    # 2. Input Prompt Bar
     with st.container():
         st.markdown("<br>", unsafe_allow_html=True)
         col_inp, col_eng, col_top, col_sub = st.columns([4, 1.8, 1.2, 1])
@@ -488,6 +471,9 @@ with tab_rag:
     if btn_send and q_input.strip():
         with st.spinner("🤖 Gemma 2 & LangGraph sedang memproses..."):
             t_start = time.time()
+            res_data = None
+
+            # Coba panggil Backend API terlebih dahulu
             try:
                 payload = {
                     "question": q_input.strip(),
@@ -495,55 +481,39 @@ with tab_rag:
                     "engine": eng_select
                 }
                 headers = {"X-API-Key": API_SECRET_KEY}
-                res = requests.post(api_rag_ask, json=payload, headers=headers, timeout=180)
-
+                res = requests.post(api_rag_ask, json=payload, headers=headers, timeout=120)
                 if res.status_code == 200:
                     res_data = res.json().get("data", {})
-                    tot_latency = time.time() - t_start
+            except Exception:
+                pass
 
-                    # Simpan ke riwayat chat
-                    st.session_state.gemma_chat_history.append({
-                        "question": q_input.strip(),
-                        "answer": res_data.get("answer", ""),
-                        "latency": tot_latency,
-                        "search_time": res_data.get("search_time", 0.0),
-                        "rerank_time": res_data.get("rerank_time", 0.0),
-                        "llm_time": res_data.get("llm_time", 0.0),
-                        "retry_count": res_data.get("retry_count", 0),
-                        "rewritten_query": res_data.get("rewritten_query"),
-                        "sources": res_data.get("sources", [])
-                    })
-                    st.rerun()
-                else:
-                    st.error(f"❌ Error API (Status {res.status_code}): {res.text}")
-            except requests.exceptions.ConnectionError:
-                # Standalone In-Process Mode (untuk Streamlit Community Cloud)
+            # Fallback otomatis ke In-Process execution jika API tidak dapat dihubungi (Streamlit Cloud)
+            if not res_data:
                 try:
-                    from eksperimen.rag_agent_langgraph_gemma import get_langgraph_gemma_agent
-                    agent = get_langgraph_gemma_agent()
+                    agent = get_cached_langgraph_agent()
                     resp_obj = agent.answer(question=q_input.strip(), top_k=int(top_k_select))
                     res_data = resp_obj.to_dict()
-                    tot_latency = time.time() - t_start
-
-                    st.session_state.gemma_chat_history.append({
-                        "question": q_input.strip(),
-                        "answer": res_data.get("answer", ""),
-                        "latency": tot_latency,
-                        "search_time": res_data.get("search_time", 0.0),
-                        "rerank_time": res_data.get("rerank_time", 0.0),
-                        "llm_time": res_data.get("llm_time", 0.0),
-                        "retry_count": res_data.get("retry_count", 0),
-                        "rewritten_query": res_data.get("rewritten_query"),
-                        "sources": res_data.get("sources", [])
-                    })
-                    st.rerun()
                 except Exception as ex_in:
-                    st.error(f"❌ Error saat memproses in-process RAG: {ex_in}")
-            except Exception as ex:
-                st.error(f"❌ Terjadi kesalahan: {ex}")
+                    st.error(f"❌ Terjadi kesalahan saat memproses jawaban: {ex_in}")
+
+            if res_data:
+                tot_latency = time.time() - t_start
+                st.session_state.gemma_chat_history.append({
+                    "question": q_input.strip(),
+                    "answer": res_data.get("answer", ""),
+                    "latency": tot_latency,
+                    "search_time": res_data.get("search_time", 0.0),
+                    "rerank_time": res_data.get("rerank_time", 0.0),
+                    "llm_time": res_data.get("llm_time", 0.0),
+                    "retry_count": res_data.get("retry_count", 0),
+                    "rewritten_query": res_data.get("rewritten_query"),
+                    "sources": res_data.get("sources", [])
+                })
+                st.rerun()
+
 
 # -------------------------------------------------------------------------
-# TAB 2: SEMANTIC SEARCH
+# TAB 2: SEMANTIC SEARCH & HYBRID RERANKING
 # -------------------------------------------------------------------------
 with tab_search:
     st.markdown("### 🔍 Semantic Search & Hybrid Reranking")
@@ -562,38 +532,45 @@ with tab_search:
         with st.spinner("Mencari arsip relevan..."):
             results = []
             elapsed = 0.0
+
+            # 1. Coba melalui API
             try:
                 t0 = time.time()
-                resp = requests.post(api_search, json={"query": search_query, "top_k": s_topk}, headers={"X-API-Key": API_SECRET_KEY}, timeout=60)
+                resp = requests.post(
+                    api_search,
+                    json={"query": search_query, "top_k": s_topk},
+                    headers={"X-API-Key": API_SECRET_KEY},
+                    timeout=30
+                )
                 if resp.status_code == 200:
                     results = resp.json().get("data", [])
                     elapsed = time.time() - t0
-                else:
-                    st.error(f"Error {resp.status_code}: {resp.text}")
-            except requests.exceptions.ConnectionError:
-                # Standalone in-process search
+            except Exception:
+                pass
+
+            # 2. Fallback In-Process jika API offline
+            if not results and collection is not None:
                 try:
                     t0 = time.time()
-                    from src.search_service import perform_semantic_search
-                    from src.lifespan import get_ml_models
-                    models = get_ml_models()
-                    raw_docs = perform_semantic_search(
-                        query=search_query,
-                        embedding_model=models.get("minilm"),
-                        collection=collection,
-                        top_k=s_topk * 2,
+                    _embed_model = load_cached_embedding_model(MODEL_PATH)
+                    q_vector = _embed_model.encode(search_query).tolist()
+                    candidate_count = max(20, s_topk * 4)
+
+                    raw_res = collection.query(
+                        query_embeddings=[q_vector],
+                        n_results=candidate_count,
+                        include=["metadatas", "distances", "documents"]
                     )
+
                     from src.reranker import get_reranker
                     reranker = get_reranker()
-                    if reranker and raw_docs:
-                        results = reranker.rerank(query=search_query, documents=raw_docs, top_k=s_topk)
+                    if reranker and raw_res:
+                        results = reranker.rerank(query=search_query, chroma_results=raw_res, top_k=s_topk)
                     else:
-                        results = raw_docs[:s_topk]
+                        results = []
                     elapsed = time.time() - t0
                 except Exception as ex_search:
-                    st.error(f"Error in-process search: {ex_search}")
-            except Exception as e:
-                st.error(f"Gagal mencari dokumen: {e}")
+                    st.error(f"Error saat mencari dokumen: {ex_search}")
 
             if results:
                 st.success(f"Ditemukan {len(results)} dokumen relevan dalam {elapsed:.3f} detik.")
