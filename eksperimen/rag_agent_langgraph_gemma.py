@@ -129,11 +129,64 @@ def clean_query_text(query: str) -> str:
 
 # ── 3. INISIALISASI LLM & RERANKER ─────────────────────────────────
 
+def discover_active_groq_model(groq_key: str, preferred_model: Optional[str] = None) -> str:
+    """
+    Menemukan model LLM yang benar-benar aktif & dapat diakses pada akun Groq.
+    Secara otomatis mengambil daftar model dari https://api.groq.com/openai/v1/models.
+    """
+    try:
+        import requests
+        resp = requests.get(
+            "https://api.groq.com/openai/v1/models",
+            headers={"Authorization": f"Bearer {groq_key}"},
+            timeout=5
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            models_data = data.get("data", [])
+            available_ids = [m.get("id") for m in models_data if m.get("id")]
+            logger.info(f"[Groq API] Model aktif yang tersedia untuk akun ini: {available_ids}")
+
+            if preferred_model and preferred_model in available_ids:
+                return preferred_model
+
+            # Daftar prioritas model chat
+            priority_candidates = [
+                "llama-3.1-8b-instant",
+                "llama3-8b-8192",
+                "llama-3.3-70b-versatile",
+                "llama-3.1-70b-versatile",
+                "llama3-70b-8192",
+                "llama-3.2-3b-preview",
+                "llama-3.2-1b-preview",
+                "mixtral-8x7b-32768",
+                "deepseek-r1-distill-llama-70b",
+                "qwen-2.5-32b",
+            ]
+            for cand in priority_candidates:
+                if cand in available_ids:
+                    logger.info(f"[Groq Auto-Select] Memilih model terbaik yang aktif: {cand}")
+                    return cand
+
+            # Jika prioritas di atas tidak cocok, ambil model teks pertama
+            chat_models = [m for m in available_ids if "whisper" not in m and "guard" not in m and "embed" not in m]
+            if chat_models:
+                logger.info(f"[Groq Auto-Select] Memilih model chat pertama: {chat_models[0]}")
+                return chat_models[0]
+        else:
+            logger.warning(f"[Groq API] Gagal mengambil list model (HTTP {resp.status_code}): {resp.text}")
+    except Exception as e:
+        logger.warning(f"[Groq Discovery Error] {e}")
+
+    # Default fallback aman jika API discovery offline
+    return preferred_model or "llama-3.1-8b-instant"
+
+
 def get_llm_instance(model_name: Optional[str] = None):
     """
     Mengembalikan instance LLM (Hybrid Cloud / Local):
     1. Jika GROQ_API_KEY disetel di st.secrets / environment (.env),
-       gunakan model ultra cepat llama-3.1-8b-instant via Groq Cloud LPU (~1000 token/s).
+       secara dinamis menemukan model aktif di Groq Cloud LPU (~1000 token/s).
     2. Jika tidak ada GROQ_API_KEY, gunakan backend Ollama lokal di laptop.
     """
     groq_key = os.getenv("GROQ_API_KEY", "").strip()
@@ -148,14 +201,12 @@ def get_llm_instance(model_name: Optional[str] = None):
     if groq_key:
         try:
             from langchain_groq import ChatGroq
-            target_model = model_name or os.getenv("GROQ_MODEL", "llama-3.1-8b-instant").strip()
-            # Validasi model jika menggunakan nama yang sudah dideprecate
-            if target_model in ["gemma2-9b-it", "gemma-7b-it", "llama-3.3-70b-versatile", ""]:
-                target_model = "llama-3.1-8b-instant"
+            requested = model_name or os.getenv("GROQ_MODEL", "").strip() or None
+            active_model = discover_active_groq_model(groq_key, preferred_model=requested)
             
-            logger.info(f"[LLM] Menggunakan Groq Cloud LPU: model={target_model}")
+            logger.info(f"[LLM] Menggunakan Groq Cloud LPU: model={active_model}")
             return ChatGroq(
-                model=target_model,
+                model=active_model,
                 groq_api_key=groq_key,
                 temperature=0.1,
             )
@@ -168,6 +219,7 @@ def get_llm_instance(model_name: Optional[str] = None):
         base_url=OLLAMA_BASE_URL,
         temperature=0.1,
     )
+
 
 
 
