@@ -202,22 +202,27 @@ st.markdown("""
 
 
 # =========================================================================
-# HELPER KONEKSI CHROMADB
+# HELPER KONEKSI CHROMADB (DUAL-MODE: HTTPCLIENT & PERSISTENTCLIENT)
 # =========================================================================
-def connect_to_chroma():
-    try:
-        client = chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
-        try:
-            return client.get_collection(name=COLLECTION_NAME)
-        except Exception:
-            return client.get_or_create_collection(name=COLLECTION_NAME)
-    except Exception as err:
-        st.sidebar.error(f"❌ ChromaDB Offline (`{CHROMA_HOST}:{CHROMA_PORT}`): {err}")
-        return None
+from src.chroma_client import get_collection, get_chroma_client
 
-
-collection = connect_to_chroma()
+collection = get_collection()
 doc_count = collection.count() if collection is not None else 0
+
+# Inisialisasi otomatis jika pertama kali berjalan di Cloud dan database masih kosong
+if collection is not None and doc_count == 0:
+    with st.spinner("⏳ Menyiapkan database vektor otomatis dari Live API SERANAH Kampus..."):
+        try:
+            from src.sync_seranah_archives import sync_seranah_to_chromadb
+            from sentence_transformers import SentenceTransformer
+            from src.config import MODEL_PATH
+            _embed_init = SentenceTransformer(MODEL_PATH)
+            _ok, _msg, _cnt = sync_seranah_to_chromadb(_embed_init, collection)
+            if _ok:
+                doc_count = _cnt
+        except Exception as _ex:
+            pass
+
 
 # =========================================================================
 # SIDEBAR: ADMIN PROFILE & CONFIGURATION
@@ -512,7 +517,28 @@ with tab_rag:
                 else:
                     st.error(f"❌ Error API (Status {res.status_code}): {res.text}")
             except requests.exceptions.ConnectionError:
-                st.error(f"❌ Gagal terhubung ke API di `{api_rag_ask}`. Pastikan server `main_api_gemma` berjalan di port 8002.")
+                # Standalone In-Process Mode (untuk Streamlit Community Cloud)
+                try:
+                    from eksperimen.rag_agent_langgraph_gemma import get_langgraph_gemma_agent
+                    agent = get_langgraph_gemma_agent()
+                    resp_obj = agent.answer(question=q_input.strip(), top_k=int(top_k_select))
+                    res_data = resp_obj.to_dict()
+                    tot_latency = time.time() - t_start
+
+                    st.session_state.gemma_chat_history.append({
+                        "question": q_input.strip(),
+                        "answer": res_data.get("answer", ""),
+                        "latency": tot_latency,
+                        "search_time": res_data.get("search_time", 0.0),
+                        "rerank_time": res_data.get("rerank_time", 0.0),
+                        "llm_time": res_data.get("llm_time", 0.0),
+                        "retry_count": res_data.get("retry_count", 0),
+                        "rewritten_query": res_data.get("rewritten_query"),
+                        "sources": res_data.get("sources", [])
+                    })
+                    st.rerun()
+                except Exception as ex_in:
+                    st.error(f"❌ Error saat memproses in-process RAG: {ex_in}")
             except Exception as ex:
                 st.error(f"❌ Terjadi kesalahan: {ex}")
 
@@ -534,35 +560,61 @@ with tab_search:
 
     if s_btn and search_query.strip():
         with st.spinner("Mencari arsip relevan..."):
+            results = []
+            elapsed = 0.0
             try:
                 t0 = time.time()
                 resp = requests.post(api_search, json={"query": search_query, "top_k": s_topk}, headers={"X-API-Key": API_SECRET_KEY}, timeout=60)
                 if resp.status_code == 200:
                     results = resp.json().get("data", [])
                     elapsed = time.time() - t0
-                    st.success(f"Ditemukan {len(results)} dokumen relevan dalam {elapsed:.3f} detik.")
-
-                    for i, doc in enumerate(results, start=1):
-                        score_pct = int(doc.get("score", 0.0) * 100)
-                        st.markdown(f"""
-                        <div class="source-card">
-                            <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
-                                <span style="background: rgba(128, 131, 255, 0.2); color: #c0c1ff; font-weight: 700; font-size: 11px; padding: 2px 8px; border-radius: 4px;">Top {i}</span>
-                                <span style="color: #10B981; font-family: 'JetBrains Mono'; font-size: 12px; font-weight: 600;">Skor: {doc.get('score', 0.0):.4f} ({score_pct}%)</span>
-                            </div>
-                            <h4 style="margin: 4px 0 8px 0; color: #F8FAFC;">{doc.get('title', 'Tanpa Judul')}</h4>
-                            <div style="font-size: 11px; color: #94A3B8; margin-bottom: 8px;">
-                                🏢 <b>Unit:</b> {doc.get('unit_kerja', '-')} | 📁 <b>Kategori:</b> {doc.get('category', '-')} | 📅 <b>Tahun:</b> {doc.get('year', '-')}
-                            </div>
-                            <div style="font-size: 12px; color: #cbd5e1; background: rgba(0,0,0,0.25); padding: 10px; border-radius: 8px;">
-                                {doc.get('snippet', doc.get('content', ''))}
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
                 else:
                     st.error(f"Error {resp.status_code}: {resp.text}")
+            except requests.exceptions.ConnectionError:
+                # Standalone in-process search
+                try:
+                    t0 = time.time()
+                    from src.search_service import perform_semantic_search
+                    from src.lifespan import get_ml_models
+                    models = get_ml_models()
+                    raw_docs = perform_semantic_search(
+                        query=search_query,
+                        embedding_model=models.get("minilm"),
+                        collection=collection,
+                        top_k=s_topk * 2,
+                    )
+                    from src.reranker import get_reranker
+                    reranker = get_reranker()
+                    if reranker and raw_docs:
+                        results = reranker.rerank(query=search_query, documents=raw_docs, top_k=s_topk)
+                    else:
+                        results = raw_docs[:s_topk]
+                    elapsed = time.time() - t0
+                except Exception as ex_search:
+                    st.error(f"Error in-process search: {ex_search}")
             except Exception as e:
                 st.error(f"Gagal mencari dokumen: {e}")
+
+            if results:
+                st.success(f"Ditemukan {len(results)} dokumen relevan dalam {elapsed:.3f} detik.")
+                for i, doc in enumerate(results, start=1):
+                    score_pct = int(doc.get("score", 0.0) * 100)
+                    st.markdown(f"""
+                    <div class="source-card">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+                            <span style="background: rgba(128, 131, 255, 0.2); color: #c0c1ff; font-weight: 700; font-size: 11px; padding: 2px 8px; border-radius: 4px;">Top {i}</span>
+                            <span style="color: #10B981; font-family: 'JetBrains Mono'; font-size: 12px; font-weight: 600;">Skor: {doc.get('score', 0.0):.4f} ({score_pct}%)</span>
+                        </div>
+                        <h4 style="margin: 4px 0 8px 0; color: #F8FAFC;">{doc.get('title', 'Tanpa Judul')}</h4>
+                        <div style="font-size: 11px; color: #94A3B8; margin-bottom: 8px;">
+                            🏢 <b>Unit:</b> {doc.get('unit_kerja', '-')} | 📁 <b>Kategori:</b> {doc.get('category', '-')} | 📅 <b>Tahun:</b> {doc.get('year', '-')}
+                        </div>
+                        <div style="font-size: 12px; color: #cbd5e1; background: rgba(0,0,0,0.25); padding: 10px; border-radius: 8px;">
+                            {doc.get('snippet', doc.get('content', ''))}
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
 
 # -------------------------------------------------------------------------
 # TAB 3: VEKTOR DATABASE EXPLORER
