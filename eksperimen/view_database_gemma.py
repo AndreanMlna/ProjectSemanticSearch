@@ -201,17 +201,20 @@ from src.chroma_client import get_collection
 collection = get_collection()
 doc_count = collection.count() if collection is not None else 0
 
-# Auto-Inisialisasi jika berjalan di Cloud dan database masih kosong (0 Docs)
-if collection is not None and doc_count == 0:
-    with st.spinner("⏳ Menyiapkan database vektor otomatis dari Live API SERANAH Kampus..."):
-        try:
-            from src.sync_seranah_archives import sync_seranah_to_chromadb
-            _embed_init = load_cached_embedding_model(MODEL_PATH)
-            _ok, _msg, _cnt = sync_seranah_to_chromadb(_embed_init, collection)
-            if _ok:
-                doc_count = _cnt
-        except Exception:
-            pass
+# Inisialisasi satu kali jika berjalan di Cloud dan database benar-benar kosong
+if "seranah_synced" not in st.session_state:
+    st.session_state["seranah_synced"] = True
+    if collection is not None and doc_count == 0:
+        with st.spinner("⏳ Menginisialisasi dataset arsip kampus ke database vektor..."):
+            try:
+                from src.sync_seranah_archives import sync_seranah_to_chromadb
+                _embed_init = load_cached_embedding_model(MODEL_PATH)
+                _ok, _msg, _cnt = sync_seranah_to_chromadb(_embed_init, collection)
+                if _ok:
+                    doc_count = _cnt
+            except Exception:
+                pass
+
 
 
 # =========================================================================
