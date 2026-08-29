@@ -152,13 +152,18 @@ def discover_active_groq_model(groq_key: str, preferred_model: Optional[str] = N
 
             # Daftar prioritas model chat
             priority_candidates = [
+                "qwen/qwen3.8-27b",
+                "qwen/qwen3.6-27b",
+                "openai/gpt-oss-120b",
+                "openai/gpt-oss-20b",
+                "allam-2-7b",
+                "groq/compound",
+                "groq/compound-mini",
                 "llama-3.1-8b-instant",
-                "llama3-8b-8192",
                 "llama-3.3-70b-versatile",
                 "llama-3.1-70b-versatile",
+                "llama3-8b-8192",
                 "llama3-70b-8192",
-                "llama-3.2-3b-preview",
-                "llama-3.2-1b-preview",
                 "mixtral-8x7b-32768",
                 "deepseek-r1-distill-llama-70b",
                 "qwen-2.5-32b",
@@ -168,8 +173,14 @@ def discover_active_groq_model(groq_key: str, preferred_model: Optional[str] = N
                     logger.info(f"[Groq Auto-Select] Memilih model terbaik yang aktif: {cand}")
                     return cand
 
-            # Jika prioritas di atas tidak cocok, ambil model teks pertama
-            chat_models = [m for m in available_ids if "whisper" not in m and "guard" not in m and "embed" not in m]
+            # Jika prioritas di atas tidak cocok, ambil model teks pertama yang bukan audio/guard
+            chat_models = [
+                m for m in available_ids 
+                if "whisper" not in m.lower() 
+                and "guard" not in m.lower() 
+                and "embed" not in m.lower() 
+                and "orpheus" not in m.lower()
+            ]
             if chat_models:
                 logger.info(f"[Groq Auto-Select] Memilih model chat pertama: {chat_models[0]}")
                 return chat_models[0]
@@ -179,7 +190,8 @@ def discover_active_groq_model(groq_key: str, preferred_model: Optional[str] = N
         logger.warning(f"[Groq Discovery Error] {e}")
 
     # Default fallback aman jika API discovery offline
-    return preferred_model or "llama-3.1-8b-instant"
+    return preferred_model or "qwen/qwen3.8-27b"
+
 
 
 def get_llm_instance(model_name: Optional[str] = None):

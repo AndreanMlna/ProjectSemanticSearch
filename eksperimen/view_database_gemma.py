@@ -18,11 +18,16 @@ import time
 import requests
 import pandas as pd
 import streamlit as st
+import torch
 from typing import List, Dict, Any, Optional, Tuple
 from dotenv import load_dotenv
 
+# Batasi penggunaan thread PyTorch di container cloud agar hemat RAM (<1GB)
+torch.set_num_threads(1)
+
 # Muat konfigurasi environment (.env)
 load_dotenv()
+
 
 # --- 1. KONFIGURASI PATH & ENVIRONMENT VARIABLES ---
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

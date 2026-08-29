@@ -176,15 +176,18 @@ def check_chroma_synced_with_sample(
 
 def index_archives_direct_to_chromadb(
     archives: List[Dict[str, Any]],
-    batch_size: int = 64
+    model=None,
+    collection=None,
+    batch_size: int = 32
 ) -> int:
     """
     Memproses dan meng-index dokumen langsung dari memori (RAM) ke ChromaDB
-    tanpa membuat atau menyimpan file fisik ke harddisk (Stateless).
+    tanpa membuat atau menyimpan file fisik ke harddisk (Stateless & Memory-Optimized).
     """
-    from sentence_transformers import SentenceTransformer
+    import gc
+    import torch
     from src.config import MODEL_PATH
-    from src.chroma_client import reset_collection
+    from src.chroma_client import reset_collection, get_collection
     from src.cache_manager import get_cache_manager
 
     logger.info("=" * 65)
@@ -193,13 +196,24 @@ def index_archives_direct_to_chromadb(
     logger.info(f"[*] Total Arsip     : {len(archives)} dokumen")
     logger.info("=" * 65)
 
-    # 1. Inisialisasi Model Embedding
-    logger.info(f"[1] Memuat model embedding: {MODEL_PATH} ...")
-    model = SentenceTransformer(MODEL_PATH)
+    # 1. Inisialisasi Model Embedding (Gunakan instance yang sudah ada di RAM jika tersedia)
+    if model is None:
+        from sentence_transformers import SentenceTransformer
+        logger.info(f"[1] Memuat model embedding: {MODEL_PATH} ...")
+        model = SentenceTransformer(MODEL_PATH)
+    else:
+        logger.info(f"[1] Menggunakan model embedding yang sudah di-cache di memori.")
 
     # 2. Reset Koleksi ChromaDB untuk pembaruan data bersih
     logger.info("[2] Menyiapkan koleksi baru ChromaDB...")
-    collection = reset_collection()
+    if collection is None:
+        collection = reset_collection()
+    else:
+        try:
+            collection = reset_collection()
+        except Exception:
+            pass
+
     if collection is None:
         raise RuntimeError("Gagal menginisialisasi atau mereset koleksi ChromaDB.")
 
@@ -268,21 +282,23 @@ def index_archives_direct_to_chromadb(
     total_valid = len(documents)
     logger.info(f"[3] Menghitung embedding dan menyimpan {total_valid} dokumen ke ChromaDB...")
 
-    # 4. Batch encode & insert ke ChromaDB
-    for i in range(0, total_valid, batch_size):
-        b_ids = ids[i:i + batch_size]
-        b_docs = documents[i:i + batch_size]
-        b_metas = metadatas[i:i + batch_size]
+    # 4. Batch encode & insert ke ChromaDB dengan torch inference_mode (Hemat RAM)
+    with torch.inference_mode():
+        for i in range(0, total_valid, batch_size):
+            b_ids = ids[i:i + batch_size]
+            b_docs = documents[i:i + batch_size]
+            b_metas = metadatas[i:i + batch_size]
 
-        b_embeddings = model.encode(b_docs, batch_size=batch_size, show_progress_bar=False).tolist()
-        collection.add(
-            ids=b_ids,
-            documents=b_docs,
-            embeddings=b_embeddings,
-            metadatas=b_metas
-        )
+            b_embeddings = model.encode(b_docs, batch_size=batch_size, show_progress_bar=False).tolist()
+            collection.add(
+                ids=b_ids,
+                documents=b_docs,
+                embeddings=b_embeddings,
+                metadatas=b_metas
+            )
+            del b_embeddings
 
-    # 5. Bersihkan cache pencarian agar hasil kueri terbaru langsung aktif
+    # 5. Bersihkan cache pencarian & jalankan garbage collection
     try:
         cache = get_cache_manager()
         cache.clear()
@@ -290,11 +306,12 @@ def index_archives_direct_to_chromadb(
     except Exception as exc:
         logger.debug(f"Pembersihan cache dilewati / tidak aktif: {exc}")
 
+    gc.collect()
     logger.info(f"[✅] Sinkronisasi selesai: {total_valid} dokumen tersimpan langsung di ChromaDB.")
     return total_valid
 
 
-def check_and_sync(auto_reindex: bool = True, **_kwargs) -> Dict[str, Any]:
+def check_and_sync(auto_reindex: bool = True, model=None, collection=None, **_kwargs) -> Dict[str, Any]:
     """
     Fungsi utama sinkronisasi (Stateless):
     1. Mengunduh data dari live API SERANAH.
@@ -342,7 +359,7 @@ def check_and_sync(auto_reindex: bool = True, **_kwargs) -> Dict[str, Any]:
         }
 
     # 3. Direct in-memory indexing ke ChromaDB (Stateless / Tanpa file)
-    synced_count = index_archives_direct_to_chromadb(remote_data)
+    synced_count = index_archives_direct_to_chromadb(remote_data, model=model, collection=collection, batch_size=32)
 
     return {
         "status": "success",
@@ -358,11 +375,12 @@ def sync_seranah_to_chromadb(model=None, collection=None) -> Tuple[bool, str, in
     Helper kompatibel untuk mengunduh dan menyinkronkan data live API SERANAH ke ChromaDB.
     Mengembalikan (success: bool, message: str, doc_count: int).
     """
-    res = check_and_sync(auto_reindex=True)
+    res = check_and_sync(auto_reindex=True, model=model, collection=collection)
     ok = res.get("status") == "success"
     msg = res.get("message", "")
     cnt = res.get("local_count") or res.get("remote_count", 0)
     return ok, msg, cnt
+
 
 
 if __name__ == "__main__":
