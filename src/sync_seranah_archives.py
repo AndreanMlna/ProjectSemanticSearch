@@ -353,5 +353,18 @@ def check_and_sync(auto_reindex: bool = True, **_kwargs) -> Dict[str, Any]:
     }
 
 
+def sync_seranah_to_chromadb(model=None, collection=None) -> Tuple[bool, str, int]:
+    """
+    Helper kompatibel untuk mengunduh dan menyinkronkan data live API SERANAH ke ChromaDB.
+    Mengembalikan (success: bool, message: str, doc_count: int).
+    """
+    res = check_and_sync(auto_reindex=True)
+    ok = res.get("status") == "success"
+    msg = res.get("message", "")
+    cnt = res.get("local_count") or res.get("remote_count", 0)
+    return ok, msg, cnt
+
+
 if __name__ == "__main__":
     check_and_sync(auto_reindex=True)
+
