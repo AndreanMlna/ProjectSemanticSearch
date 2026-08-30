@@ -44,7 +44,7 @@ logger = setup_logging("langgraph_gemma")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 OLLAMA_MODEL = os.getenv("GEMMA_MODEL", "gemma2:2b")
 TOP_K_DEFAULT = 10
-SCORE_THRESHOLD = 0.25  # Ambang batas relevansi Cross-Encoder
+SCORE_THRESHOLD = 0.4  # Ambang batas relevansi Cross-Encoder
 
 _embedding_model_cache = None
 
