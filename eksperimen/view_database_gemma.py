@@ -479,7 +479,7 @@ if st.session_state.active_mode == "chat":
                 st.markdown(item["question"])
 
             # 2. Respons AI Assistant
-            with st.chat_message("assistant", avatar="✦"):
+            with st.chat_message("assistant", avatar="✨"):
                 # Badge jika terjadi Self-Correction pada LangGraph
                 if item.get("retry_count", 0) > 0 and item.get("rewritten_query"):
                     st.caption(f"🔄 *Self-Corrected Query:* `{item.get('rewritten_query')}`")
