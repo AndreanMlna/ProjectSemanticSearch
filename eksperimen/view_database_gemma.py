@@ -601,47 +601,107 @@ if st.session_state.active_mode == "chat":
         st.session_state.pending_query = None
 
     if user_prompt and user_prompt.strip():
-        with st.spinner("✦ SERANAH AI sedang menganalisis dokumen arsip..."):
-            t_start = time.time()
-            res_data = None
+        # 1. Tampilkan Pertanyaan Pengguna Secara Instan di Layar
+        with st.chat_message("user", avatar="👤"):
+            st.markdown(user_prompt.strip())
 
-            # 1. Coba hubungi FastAPI backend eksternal jika aktif
-            try:
-                payload = {
-                    "question": user_prompt.strip(),
-                    "top_k": 10,
-                    "engine": "langgraph"
-                }
-                headers = {"X-API-Key": API_SECRET_KEY}
-                res = requests.post(f"{DEFAULT_GEMMA_API}/rag/ask", json=payload, headers=headers, timeout=120)
-                if res.status_code == 200:
-                    res_data = res.json().get("data", {})
-            except Exception:
-                pass
+        # 2. Tampilkan Respons AI dengan Efek Ketikan Streaming Real-time (Gemini / ChatGPT Style)
+        with st.chat_message("assistant", avatar="✨"):
+            with st.spinner("✦ SERANAH AI sedang menganalisis dokumen arsip..."):
+                t_start = time.time()
+                res_data = None
 
-            # 2. Fallback otomatis ke In-Process LangGraph Agent (Streamlit Cloud)
-            if not res_data:
+                # Coba hubungi FastAPI backend eksternal jika aktif
                 try:
-                    agent = get_cached_langgraph_agent()
-                    resp_obj = agent.answer(question=user_prompt.strip(), top_k=10)
-                    res_data = resp_obj.to_dict()
-                except Exception as ex_in:
-                    st.error(f"❌ Terjadi kesalahan saat memproses jawaban: {ex_in}")
+                    payload = {
+                        "question": user_prompt.strip(),
+                        "top_k": 10,
+                        "engine": "langgraph"
+                    }
+                    headers = {"X-API-Key": API_SECRET_KEY}
+                    res = requests.post(f"{DEFAULT_GEMMA_API}/rag/ask", json=payload, headers=headers, timeout=120)
+                    if res.status_code == 200:
+                        res_data = res.json().get("data", {})
+                except Exception:
+                    pass
+
+                # Fallback otomatis ke In-Process LangGraph Agent (Streamlit Cloud)
+                if not res_data:
+                    try:
+                        agent = get_cached_langgraph_agent()
+                        resp_obj = agent.answer(question=user_prompt.strip(), top_k=10)
+                        res_data = resp_obj.to_dict()
+                    except Exception as ex_in:
+                        st.error(f"❌ Terjadi kesalahan saat memproses jawaban: {ex_in}")
 
             if res_data:
                 tot_latency = time.time() - t_start
+                full_answer = res_data.get("answer", "")
+                sources = res_data.get("sources", [])
+
+                # Badge jika terjadi Self-Correction pada LangGraph
+                if res_data.get("retry_count", 0) > 0 and res_data.get("rewritten_query"):
+                    st.caption(f"🔄 *Self-Corrected Query:* `{res_data.get('rewritten_query')}`")
+
+                # Generator Streaming Ketikan Kata-per-Kata (Typewriter Effect)
+                def stream_typing_generator(text: str):
+                    words = text.split(" ")
+                    for i, w in enumerate(words):
+                        yield w + (" " if i < len(words) - 1 else "")
+                        time.sleep(0.015)  # 15ms per kata untuk efek animasi mengetik alami
+
+                # Ketik jawaban secara langsung di layar
+                st.write_stream(stream_typing_generator(full_answer))
+
+                # Inline Citation Pills
+                if sources:
+                    top_sources = sources[:3]
+                    pills_md = " ".join([f"`📄 {s.get('title', 'Dokumen')[:30]}`" for s in top_sources])
+                    st.markdown(f"<div style='margin-top: 8px;'><b>Dokumen Terkait:</b> {pills_md}</div>", unsafe_allow_html=True)
+
+                # Telemetry Bar Ringkas
+                st.markdown(f"""
+                <div class="telemetry-row">
+                    <span>⚡ Latensi: {tot_latency:.2f}s</span>
+                    <span>•</span>
+                    <span>Qwen 3.8 27B (Groq LPU)</span>
+                    <span>•</span>
+                    <span>ChromaDB Vector</span>
+                </div>
+                """, unsafe_allow_html=True)
+
+                # Expander Sumber Dokumen Terverifikasi
+                if sources:
+                    with st.expander(f"📚 Rincian {len(sources)} Dokumen Sumber (Source Citations)", expanded=False):
+                        for idx, src in enumerate(sources, start=1):
+                            score_pct = int(src.get("score", 0.0) * 100)
+                            st.markdown(f"""
+                            <div class="source-card-gemini">
+                                <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                                    <span style="color: #a8c7fa; font-weight: 600; font-size: 13px;">[{idx}] {src.get('title', 'Tanpa Judul')}</span>
+                                    <span style="color: #10B981; font-family: 'JetBrains Mono'; font-size: 11px;">Relevansi: {score_pct}%</span>
+                                </div>
+                                <div style="font-size: 11px; color: #8e918f; margin-bottom: 6px;">
+                                    No. Dokumen: <b>{src.get('document_number', '-')}</b> | Unit: <b>{src.get('unit_kerja', '-')}</b> | Tahun: <b>{src.get('year', '-')}</b>
+                                </div>
+                                <div style="font-size: 12px; color: #c4c7c5; background: rgba(0,0,0,0.3); padding: 8px 10px; border-radius: 8px; line-height: 1.5;">
+                                    {src.get('snippet', '')}
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                # Simpan ke riwayat sesi chat
                 st.session_state.gemma_chat_history.append({
                     "question": user_prompt.strip(),
-                    "answer": res_data.get("answer", ""),
+                    "answer": full_answer,
                     "latency": tot_latency,
                     "search_time": res_data.get("search_time", 0.0),
                     "rerank_time": res_data.get("rerank_time", 0.0),
                     "llm_time": res_data.get("llm_time", 0.0),
                     "retry_count": res_data.get("retry_count", 0),
                     "rewritten_query": res_data.get("rewritten_query"),
-                    "sources": res_data.get("sources", [])
+                    "sources": sources
                 })
-                st.rerun()
 
     # Footer Disclaimer (Gemini Style)
     st.markdown("""
