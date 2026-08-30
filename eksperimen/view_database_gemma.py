@@ -3,13 +3,13 @@ eksperimen/view_database_gemma.py
 ================================
 Antarmuka Streamlit Generatif Modern untuk SERANAH AI
 Mengadopsi Desain Conversational Google Gemini / ChatGPT (Google Stitch Dark Design System)
-dengan Bottom Floating Input, Natural Message Stream, & Inline Source Citations.
+dengan Streamlit Native Chat Messages, Floating Bottom Input, & Responsive Layout.
 
 Fitur:
-1. Google Gemini Conversational Layout (Floating Bottom Chat Input, Clean Stream, Prompt Chips).
+1. Google Gemini Conversational Layout (Native st.chat_message, Clean Typography, Zero Overflow).
 2. Arsitektur LangGraph Corrective RAG (CRAG) + Bi-Encoder MiniLM + Cross-Encoder Reranker.
 3. Dual-Mode Deployment: Streamlit Cloud Standalone In-Process & FastAPI External Backend.
-4. Telemetri Real-time, Verifikasi Dokumen Sumber (PDF Badges), dan Auto-Sync ChromaDB.
+4. Telemetri Real-time, Verifikasi Dokumen Sumber (PDF Citations), dan Auto-Sync ChromaDB.
 """
 
 import os
@@ -97,7 +97,15 @@ def inject_gemini_theme_css():
             font-family: 'Inter', sans-serif !important;
         }
         
-        /* Headers & Headings */
+        /* Container Centering for ChatGPT / Gemini Look */
+        .main .block-container {
+            max-width: 820px !important;
+            padding-top: 1.5rem !important;
+            padding-bottom: 5.5rem !important;
+            margin: 0 auto !important;
+        }
+        
+        /* Headers */
         h1, h2, h3, h4, h5, h6 {
             font-family: 'Plus Jakarta Sans', sans-serif !important;
             color: #f1f3f4 !important;
@@ -128,95 +136,40 @@ def inject_gemini_theme_css():
             margin-right: 6px;
         }
         
-        /* User Chat Bubble (Gemini / ChatGPT Style) */
-        .user-chat-row {
-            display: flex;
-            justify-content: flex-end;
-            margin-bottom: 24px;
-            margin-top: 12px;
+        /* Native Streamlit Chat Message Customization */
+        div[data-testid="stChatMessage"] {
+            padding: 12px 16px !important;
+            border-radius: 16px !important;
+            margin-bottom: 16px !important;
+            background-color: transparent !important;
         }
         
-        .user-bubble-gemini {
-            background: #282a2c;
-            color: #f1f3f4;
-            border-radius: 20px 20px 4px 20px;
-            padding: 12px 20px;
-            max-width: 80%;
-            font-size: 15px;
-            line-height: 1.6;
-            border: 1px solid rgba(255, 255, 255, 0.06);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        /* User Chat Bubble (Right Aligned / Card) */
+        div[data-testid="stChatMessage"]:has(div[data-testid="stChatMessageAvatarUser"]) {
+            background-color: #282a2c !important;
+            border: 1px solid rgba(255, 255, 255, 0.08) !important;
+            border-radius: 20px 20px 4px 20px !important;
+            margin-left: auto !important;
+            max-width: 85% !important;
         }
         
-        /* Assistant Chat Stream (Gemini Style) */
-        .ai-chat-row {
-            display: flex;
-            gap: 16px;
-            margin-bottom: 32px;
-            align-items: flex-start;
-        }
-        
-        .ai-avatar {
-            width: 34px;
-            height: 34px;
-            border-radius: 50%;
-            background: radial-gradient(circle at 30% 30%, #4285F4, #9B72CB, #1e1f20);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 17px;
-            color: white;
-            flex-shrink: 0;
-            margin-top: 2px;
-            box-shadow: 0 0 12px rgba(155, 114, 203, 0.35);
-        }
-        
-        .ai-content-gemini {
-            flex: 1;
-            font-size: 15px;
-            line-height: 1.7;
-            color: #e3e3e3;
-        }
-        
-        /* PDF Badge / Inline Citation Pill */
-        .pdf-pill-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            background: rgba(255, 255, 255, 0.08);
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            color: #a8c7fa;
-            border-radius: 6px;
-            padding: 2px 7px;
-            font-size: 11px;
-            font-family: 'JetBrains Mono', monospace;
-            font-weight: 500;
-            margin-left: 4px;
-            vertical-align: middle;
-        }
-        
-        /* Telemetry & Action Footer */
-        .ai-action-bar {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            margin-top: 14px;
-            padding-top: 10px;
-            border-top: 1px solid rgba(255, 255, 255, 0.05);
-            font-size: 12px;
-            color: #8e918f;
+        /* AI Assistant Avatar */
+        div[data-testid="stChatMessageAvatarAssistant"] {
+            background: radial-gradient(circle at 30% 30%, #4285F4, #9B72CB, #1e1f20) !important;
+            color: #ffffff !important;
+            border-radius: 50% !important;
+            border: 1px solid rgba(255, 255, 255, 0.15) !important;
         }
         
         /* Hero Welcome Screen (Gemini Empty State) */
         .hero-welcome-container {
             text-align: left;
-            padding: 40px 10px 30px 10px;
-            max-width: 780px;
-            margin: 0 auto;
+            padding: 30px 4px 20px 4px;
+            max-width: 100%;
         }
         
         .hero-title {
-            font-size: 38px;
+            font-size: 36px;
             font-weight: 700;
             line-height: 1.2;
             margin-bottom: 8px;
@@ -224,35 +177,30 @@ def inject_gemini_theme_css():
         }
         
         .hero-subtitle {
-            font-size: 24px;
+            font-size: 20px;
             color: #8e918f;
             font-weight: 500;
-            margin-bottom: 28px;
-        }
-        
-        /* Suggestion Chips */
-        .suggestion-chip-card {
-            background: #1e1f20;
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: 16px;
-            padding: 16px 18px;
-            transition: all 0.2s ease;
-            height: 100%;
-            cursor: pointer;
-        }
-        .suggestion-chip-card:hover {
-            background: #282a2c;
-            border-color: rgba(168, 199, 250, 0.3);
-            transform: translateY(-2px);
+            margin-bottom: 24px;
         }
         
         /* Source Citation Card in Expander */
         .source-card-gemini {
             background: #1e1f20;
-            border: 1px solid rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.08);
             border-radius: 12px;
-            padding: 14px;
-            margin-bottom: 10px;
+            padding: 12px 14px;
+            margin-bottom: 8px;
+        }
+        
+        /* Telemetry & Action Footer */
+        .telemetry-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 8px;
+            font-size: 11.5px;
+            color: #8e918f;
+            font-family: 'JetBrains Mono', monospace;
         }
         
         /* Disclaimer Bottom Note */
@@ -260,8 +208,8 @@ def inject_gemini_theme_css():
             text-align: center;
             font-size: 11.5px;
             color: #8e918f;
-            margin-top: 10px;
-            margin-bottom: 20px;
+            margin-top: 14px;
+            margin-bottom: 8px;
         }
         
         /* Custom Modern Button */
@@ -269,9 +217,11 @@ def inject_gemini_theme_css():
             background: #282a2c !important;
             color: #e3e3e3 !important;
             border: 1px solid rgba(255, 255, 255, 0.1) !important;
-            border-radius: 20px !important;
+            border-radius: 16px !important;
             font-weight: 500 !important;
             font-size: 13px !important;
+            padding: 12px 16px !important;
+            text-align: left !important;
             transition: all 0.2s ease !important;
         }
         .stButton > button:hover {
@@ -318,7 +268,7 @@ if "seranah_synced" not in st.session_state:
             except Exception:
                 pass
 
-# Inisialisasi Session State Riwayat Chat
+# Inisialisasi Session State Riwayat Chat & Pengguna
 if "gemma_chat_history" not in st.session_state:
     st.session_state.gemma_chat_history = []
 
@@ -377,9 +327,9 @@ with st.sidebar:
     st.markdown("<div style='font-size: 12px; font-weight: 600; color: #8e918f; margin-bottom: 8px;'>Terbaru</div>", unsafe_allow_html=True)
     if st.session_state.gemma_chat_history:
         for idx, hist in enumerate(reversed(st.session_state.gemma_chat_history[-5:])):
-            q_short = hist["question"][:30] + "..." if len(hist["question"]) > 30 else hist["question"]
+            q_short = hist["question"][:28] + "..." if len(hist["question"]) > 28 else hist["question"]
             st.markdown(f"""
-            <div style="font-size: 13px; color: #c4c7c5; padding: 6px 10px; border-radius: 8px; margin-bottom: 4px; background: rgba(255,255,255,0.03); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+            <div style="font-size: 12.5px; color: #c4c7c5; padding: 6px 10px; border-radius: 8px; margin-bottom: 4px; background: rgba(255,255,255,0.03); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
                 💬 {q_short}
             </div>
             """, unsafe_allow_html=True)
@@ -502,7 +452,7 @@ if st.session_state.active_mode == "chat":
                 st.session_state.pending_query = "Bagaimana pedoman integrasi penelitian dan pengabdian masyarakat dalam pembelajaran?"
                 st.rerun()
             
-            st.markdown("<div style='margin: 8px 0;'></div>", unsafe_allow_html=True)
+            st.markdown("<div style='margin: 6px 0;'></div>", unsafe_allow_html=True)
             
             if st.button("👥 SOP Pengumuman Staf Baru\nBagaimana prosedur dan pengarahan penugasan staf pengabdian?", use_container_width=True):
                 st.session_state.pending_query = "Jelaskan SOP pengumuman dan pengarahan penugasan staf pengabdian baru"
@@ -513,80 +463,61 @@ if st.session_state.active_mode == "chat":
                 st.session_state.pending_query = "Apa alasan dan ketentuan program proofreading bahasa tugas akhir mahasiswa?"
                 st.rerun()
                 
-            st.markdown("<div style='margin: 8px 0;'></div>", unsafe_allow_html=True)
+            st.markdown("<div style='margin: 6px 0;'></div>", unsafe_allow_html=True)
             
             if st.button("🏛️ Struktur Organisasi & Rektorat\nSiapa pimpinan dan regulasi ketetapan rektorat universitas?", use_container_width=True):
                 st.session_state.pending_query = "Siapa rektor dan apa saja regulasi ketetapan pimpinan universitas?"
                 st.rerun()
 
-        st.markdown("<div style='margin-bottom: 60px;'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='margin-bottom: 40px;'></div>", unsafe_allow_html=True)
 
     else:
-        # JIKA ADA RIWAYAT CHAT: RENDER STREAM CONVERSATION (CHATGPT / GEMINI STYLE)
+        # JIKA ADA RIWAYAT CHAT: RENDER STREAM CONVERSATION NATIVE (GEMINI / CHATGPT)
         for item in st.session_state.gemma_chat_history:
-            # 1. Bubble Pesan Pengguna (Kanan)
-            st.markdown(f"""
-            <div class="user-chat-row">
-                <div class="user-bubble-gemini">
-                    {item['question']}
+            # 1. Pesan Pengguna
+            with st.chat_message("user", avatar="👤"):
+                st.markdown(item["question"])
+
+            # 2. Respons AI Assistant
+            with st.chat_message("assistant", avatar="✦"):
+                # Badge jika terjadi Self-Correction pada LangGraph
+                if item.get("retry_count", 0) > 0 and item.get("rewritten_query"):
+                    st.caption(f"🔄 *Self-Corrected Query:* `{item.get('rewritten_query')}`")
+
+                # Isi Jawaban Markdown Bersih (Tanpa bug tag div)
+                st.markdown(item["answer"])
+
+                # Telemetry Bar Ringkas
+                st.markdown(f"""
+                <div class="telemetry-row">
+                    <span>⚡ Latensi: {item.get('latency', 0.0):.2f}s</span>
+                    <span>•</span>
+                    <span>Qwen 3.8 27B (Groq LPU)</span>
+                    <span>•</span>
+                    <span>ChromaDB Vector</span>
                 </div>
-            </div>
-            """, unsafe_allow_html=True)
+                """, unsafe_allow_html=True)
 
-            # 2. Respons AI Assistant (Kiri - Aliran Teks Alami)
-            sources = item.get("sources", [])
-            source_pills_html = ""
-            for idx, s in enumerate(sources[:3], start=1):
-                doc_title_short = s.get('title', 'Dokumen')[:25]
-                source_pills_html += f'<span class="pdf-pill-badge">📄 {doc_title_short}</span>'
-
-            retry_badge = ""
-            if item.get("retry_count", 0) > 0 and item.get("rewritten_query"):
-                retry_badge = f"""
-                <div style="font-size: 11px; color: #f4a261; margin-bottom: 8px; font-family: 'JetBrains Mono';">
-                    🔄 Self-Corrected Query: "{item.get('rewritten_query')}"
-                </div>
-                """
-
-            st.markdown(f"""
-            <div class="ai-chat-row">
-                <div class="ai-avatar">✦</div>
-                <div class="ai-content-gemini">
-                    {retry_badge}
-                    <div style="color: #e3e3e3; font-size: 15.5px; line-height: 1.75;">
-                        {item['answer']}
-                    </div>
-                    <div class="ai-action-bar">
-                        <span>⚡ {item.get('latency', 0.0):.2f}s</span>
-                        <span>•</span>
-                        <span>Qwen 3.8 27B</span>
-                        <span>•</span>
-                        <span>ChromaDB Vector</span>
-                        {source_pills_html}
-                    </div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-
-            # Expander Sumber Dokumen Terverifikasi
-            if sources:
-                with st.expander(f"📚 Rincian {len(sources)} Dokumen Sumber (Source Citations)", expanded=False):
-                    for idx, src in enumerate(sources, start=1):
-                        score_pct = int(src.get("score", 0.0) * 100)
-                        st.markdown(f"""
-                        <div class="source-card-gemini">
-                            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                                <span style="color: #a8c7fa; font-weight: 600; font-size: 13px;">[{idx}] {src.get('title', 'Tanpa Judul')}</span>
-                                <span style="color: #10B981; font-family: 'JetBrains Mono'; font-size: 11px;">Relevansi: {score_pct}%</span>
+                # Expander Sumber Dokumen Terverifikasi
+                sources = item.get("sources", [])
+                if sources:
+                    with st.expander(f"📚 Rincian {len(sources)} Dokumen Sumber (Source Citations)", expanded=False):
+                        for idx, src in enumerate(sources, start=1):
+                            score_pct = int(src.get("score", 0.0) * 100)
+                            st.markdown(f"""
+                            <div class="source-card-gemini">
+                                <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                                    <span style="color: #a8c7fa; font-weight: 600; font-size: 13px;">[{idx}] {src.get('title', 'Tanpa Judul')}</span>
+                                    <span style="color: #10B981; font-family: 'JetBrains Mono'; font-size: 11px;">Relevansi: {score_pct}%</span>
+                                </div>
+                                <div style="font-size: 11px; color: #8e918f; margin-bottom: 6px;">
+                                    No. Dokumen: <b>{src.get('document_number', '-')}</b> | Unit: <b>{src.get('unit_kerja', '-')}</b> | Tahun: <b>{src.get('year', '-')}</b>
+                                </div>
+                                <div style="font-size: 12px; color: #c4c7c5; background: rgba(0,0,0,0.3); padding: 8px 10px; border-radius: 8px; line-height: 1.5;">
+                                    {src.get('snippet', '')}
+                                </div>
                             </div>
-                            <div style="font-size: 11px; color: #8e918f; margin-bottom: 8px;">
-                                No. Dokumen: <b>{src.get('document_number', '-')}</b> | Unit: <b>{src.get('unit_kerja', '-')}</b> | Tahun: <b>{src.get('year', '-')}</b>
-                            </div>
-                            <div style="font-size: 12px; color: #c4c7c5; background: rgba(0,0,0,0.25); padding: 10px; border-radius: 8px; line-height: 1.5;">
-                                {src.get('snippet', '')}
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
+                            """, unsafe_allow_html=True)
 
     # ---------------------------------------------------------------------
     # 7. INPUT CHAT STREAMLIT (PINNED DI BAGIAN BAWAH SEPERTI GEMINI/CHATGPT)
