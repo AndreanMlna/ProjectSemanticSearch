@@ -2,14 +2,14 @@
 eksperimen/view_database_gemma.py
 ================================
 Antarmuka Streamlit Generatif Modern untuk SERANAH AI
-Mengadopsi Desain Conversational Google Gemini / ChatGPT (Google Stitch Dark Design System)
-dengan Streamlit Native Chat Messages, Floating Bottom Input, & Responsive Layout.
+Mengadopsi Desain Conversational Google Gemini (Google Stitch Dark Design System)
+dengan Alur Percakapan Terpadu, Seamless Bottom Input, & Responsive Layout.
 
 Fitur:
-1. Google Gemini Conversational Layout (Native st.chat_message, Clean Typography, Zero Overflow).
+1. Google Gemini Conversational Canvas (Unified View, Clean Typography, Zero Overlap).
 2. Arsitektur LangGraph Corrective RAG (CRAG) + Bi-Encoder MiniLM + Cross-Encoder Reranker.
 3. Dual-Mode Deployment: Streamlit Cloud Standalone In-Process & FastAPI External Backend.
-4. Telemetri Real-time, Verifikasi Dokumen Sumber (PDF Citations), dan Auto-Sync ChromaDB.
+4. Telemetri Real-time, Verifikasi Dokumen Sumber (PDF Badges), dan Auto-Sync ChromaDB.
 """
 
 import os
@@ -53,7 +53,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 # Konfigurasi Halaman Streamlit
 st.set_page_config(
     page_title="SERANAH AI - Campus Intelligence",
-    page_icon="✦",
+    page_icon="✨",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -97,11 +97,11 @@ def inject_gemini_theme_css():
             font-family: 'Inter', sans-serif !important;
         }
         
-        /* Container Centering for ChatGPT / Gemini Look */
+        /* Unified Container Canvas (Google Gemini Center Column) */
         .main .block-container {
-            max-width: 820px !important;
-            padding-top: 1.5rem !important;
-            padding-bottom: 5.5rem !important;
+            max-width: 840px !important;
+            padding-top: 2rem !important;
+            padding-bottom: 9rem !important; /* Ruang lega di bawah agar tidak tertutup chat input */
             margin: 0 auto !important;
         }
         
@@ -116,6 +116,25 @@ def inject_gemini_theme_css():
         [data-testid="stSidebar"] {
             background-color: #1e1f20 !important;
             border-right: 1px solid rgba(255, 255, 255, 0.07) !important;
+        }
+        
+        /* Sidebar Radio Navigation styled as Gemini Tab List */
+        [data-testid="stSidebar"] div[role="radiogroup"] > label {
+            background: rgba(255, 255, 255, 0.03) !important;
+            border: 1px solid rgba(255, 255, 255, 0.05) !important;
+            border-radius: 12px !important;
+            padding: 10px 14px !important;
+            margin-bottom: 8px !important;
+            transition: all 0.2s ease !important;
+            cursor: pointer !important;
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] > label:hover {
+            background: rgba(255, 255, 255, 0.07) !important;
+            border-color: rgba(168, 199, 250, 0.2) !important;
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] > label[data-checked="true"] {
+            background: #282a2c !important;
+            border-color: rgba(168, 199, 250, 0.4) !important;
         }
         
         /* Gemini Sparkle Gradient */
@@ -138,19 +157,28 @@ def inject_gemini_theme_css():
         
         /* Native Streamlit Chat Message Customization */
         div[data-testid="stChatMessage"] {
-            padding: 12px 16px !important;
+            padding: 8px 12px !important;
             border-radius: 16px !important;
-            margin-bottom: 16px !important;
+            margin-bottom: 20px !important;
             background-color: transparent !important;
         }
         
-        /* User Chat Bubble (Right Aligned / Card) */
+        /* User Chat Bubble (Compact Pill Aligned Right) */
         div[data-testid="stChatMessage"]:has(div[data-testid="stChatMessageAvatarUser"]) {
             background-color: #282a2c !important;
             border: 1px solid rgba(255, 255, 255, 0.08) !important;
             border-radius: 20px 20px 4px 20px !important;
             margin-left: auto !important;
-            max-width: 85% !important;
+            max-width: 80% !important;
+            padding: 10px 18px !important;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15) !important;
+        }
+        
+        /* Assistant Chat Message (Clean Left Aligned Stream) */
+        div[data-testid="stChatMessage"]:has(div[data-testid="stChatMessageAvatarAssistant"]) {
+            background-color: transparent !important;
+            border: none !important;
+            padding-left: 0 !important;
         }
         
         /* AI Assistant Avatar */
@@ -169,7 +197,7 @@ def inject_gemini_theme_css():
         }
         
         .hero-title {
-            font-size: 36px;
+            font-size: 38px;
             font-weight: 700;
             line-height: 1.2;
             margin-bottom: 8px;
@@ -177,10 +205,10 @@ def inject_gemini_theme_css():
         }
         
         .hero-subtitle {
-            font-size: 20px;
+            font-size: 22px;
             color: #8e918f;
             font-weight: 500;
-            margin-bottom: 24px;
+            margin-bottom: 28px;
         }
         
         /* Source Citation Card in Expander */
@@ -197,10 +225,28 @@ def inject_gemini_theme_css():
             display: flex;
             align-items: center;
             gap: 8px;
-            margin-top: 8px;
+            margin-top: 12px;
+            padding-top: 8px;
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
             font-size: 11.5px;
             color: #8e918f;
             font-family: 'JetBrains Mono', monospace;
+        }
+        
+        /* Inline Citation Badge */
+        .pdf-pill-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: rgba(168, 199, 250, 0.12);
+            border: 1px solid rgba(168, 199, 250, 0.25);
+            color: #a8c7fa;
+            border-radius: 6px;
+            padding: 2px 8px;
+            font-size: 11.5px;
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 500;
+            margin-top: 6px;
         }
         
         /* Disclaimer Bottom Note */
@@ -208,8 +254,8 @@ def inject_gemini_theme_css():
             text-align: center;
             font-size: 11.5px;
             color: #8e918f;
-            margin-top: 14px;
-            margin-bottom: 8px;
+            margin-top: 8px;
+            margin-bottom: 12px;
         }
         
         /* Custom Modern Button */
@@ -230,15 +276,16 @@ def inject_gemini_theme_css():
             color: #ffffff !important;
         }
         
-        /* Streamlit Native Chat Input Styling */
+        /* Streamlit Native Chat Input Styling (Gemini Floating Pill) */
         [data-testid="stChatInput"] {
             border-radius: 28px !important;
             background-color: #1e1f20 !important;
-            border: 1px solid rgba(255, 255, 255, 0.12) !important;
+            border: 1px solid rgba(255, 255, 255, 0.14) !important;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3) !important;
         }
         [data-testid="stChatInput"]:focus-within {
             border-color: #7da5ff !important;
-            box-shadow: 0 0 10px rgba(125, 165, 255, 0.2) !important;
+            box-shadow: 0 0 14px rgba(125, 165, 255, 0.25) !important;
         }
     </style>
     """, unsafe_allow_html=True)
@@ -306,17 +353,21 @@ with st.sidebar:
 
     st.markdown("<div style='margin: 12px 0;'></div>", unsafe_allow_html=True)
 
-    # Menu Navigasi Antarmuka
+    # Menu Navigasi Antarmuka (Ringkas & Bersih ala Gemini)
     nav_option = st.radio(
         "Navigasi:",
-        options=["💬 Chatbot Kampus Arsip Digital Universitas Darussalam Gontor", "🔍 Semantic Search Explorer", "📊 Database Vektor"],
+        options=[
+            "💬 Tanya Arsip Kampus",
+            "🔍 Pencarian Dokumen",
+            "📊 Database Vektor"
+        ],
         index=0 if st.session_state.active_mode == "chat" else (1 if st.session_state.active_mode == "search" else 2),
         label_visibility="collapsed"
     )
 
-    if "Chatbot" in nav_option:
+    if "Tanya Arsip" in nav_option:
         st.session_state.active_mode = "chat"
-    elif "Semantic Search" in nav_option:
+    elif "Pencarian" in nav_option:
         st.session_state.active_mode = "search"
     else:
         st.session_state.active_mode = "explore"
@@ -474,18 +525,25 @@ if st.session_state.active_mode == "chat":
     else:
         # JIKA ADA RIWAYAT CHAT: RENDER STREAM CONVERSATION NATIVE (GEMINI / CHATGPT)
         for item in st.session_state.gemma_chat_history:
-            # 1. Pesan Pengguna
+            # 1. Pesan Pengguna (Kanan)
             with st.chat_message("user", avatar="👤"):
                 st.markdown(item["question"])
 
-            # 2. Respons AI Assistant
+            # 2. Respons AI Assistant (Kiri - Aliran Percakapan Utuh)
             with st.chat_message("assistant", avatar="✨"):
                 # Badge jika terjadi Self-Correction pada LangGraph
                 if item.get("retry_count", 0) > 0 and item.get("rewritten_query"):
                     st.caption(f"🔄 *Self-Corrected Query:* `{item.get('rewritten_query')}`")
 
-                # Isi Jawaban Markdown Bersih (Tanpa bug tag div)
+                # Isi Jawaban Markdown Bersih
                 st.markdown(item["answer"])
+
+                # Citation Pills (Inline Dokumen Pendukung)
+                sources = item.get("sources", [])
+                if sources:
+                    top_sources = sources[:3]
+                    pills_md = " ".join([f"`📄 {s.get('title', 'Dokumen')[:30]}`" for s in top_sources])
+                    st.markdown(f"<div style='margin-top: 8px;'><b>Dokumen Terkait:</b> {pills_md}</div>", unsafe_allow_html=True)
 
                 # Telemetry Bar Ringkas
                 st.markdown(f"""
@@ -499,7 +557,6 @@ if st.session_state.active_mode == "chat":
                 """, unsafe_allow_html=True)
 
                 # Expander Sumber Dokumen Terverifikasi
-                sources = item.get("sources", [])
                 if sources:
                     with st.expander(f"📚 Rincian {len(sources)} Dokumen Sumber (Source Citations)", expanded=False):
                         for idx, src in enumerate(sources, start=1):
@@ -575,7 +632,7 @@ if st.session_state.active_mode == "chat":
     # Footer Disclaimer (Gemini Style)
     st.markdown("""
     <div class="gemini-disclaimer">
-        SERANAH AI dapat membuat kesalahan. Selalu periksa dan verifikasi dokumen arsip resmi kampus.
+        SERANAH AI adalah asisten kecerdasan kampus. Selalu periksa dan verifikasi dokumen arsip resmi universitas.
     </div>
     """, unsafe_allow_html=True)
 
