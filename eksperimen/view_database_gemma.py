@@ -309,7 +309,7 @@ with st.sidebar:
     # Menu Navigasi Antarmuka
     nav_option = st.radio(
         "Navigasi:",
-        options=["💬 Chatbot Kampus (Gemini)", "🔍 Semantic Search Explorer", "📊 Database Vektor"],
+        options=["💬 Chatbot Kampus Arsip Digital Universitas Darussalam Gontor", "🔍 Semantic Search Explorer", "📊 Database Vektor"],
         index=0 if st.session_state.active_mode == "chat" else (1 if st.session_state.active_mode == "search" else 2),
         label_visibility="collapsed"
     )
