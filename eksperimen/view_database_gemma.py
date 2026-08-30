@@ -3,19 +3,21 @@ eksperimen/view_database_gemma.py
 ================================
 Antarmuka Streamlit Generatif Modern untuk SERANAH AI
 Mengadopsi Desain Conversational Google Gemini (Google Stitch Dark Design System)
-dengan Alur Percakapan Terpadu, Seamless Bottom Input, & Responsive Layout.
+dengan Visualisasi 3D Ruang Vektor Dokumen (PCA + Plotly 3D) & Animasi Mikro Interaktif.
 
 Fitur:
 1. Google Gemini Conversational Canvas (Unified View, Clean Typography, Zero Overlap).
-2. Arsitektur LangGraph Corrective RAG (CRAG) + Bi-Encoder MiniLM + Cross-Encoder Reranker.
-3. Dual-Mode Deployment: Streamlit Cloud Standalone In-Process & FastAPI External Backend.
-4. Telemetri Real-time, Verifikasi Dokumen Sumber (PDF Badges), dan Auto-Sync ChromaDB.
+2. 🌌 Visualisasi 3D Interaktif Ruang Vektor Dokumen (3D Embedding Space Galaxy).
+3. Arsitektur LangGraph Corrective RAG (CRAG) + Bi-Encoder MiniLM + Cross-Encoder Reranker.
+4. Dual-Mode Deployment: Streamlit Cloud Standalone In-Process & FastAPI External Backend.
+5. Telemetri Real-time, Verifikasi Dokumen Sumber (PDF Badges), dan Auto-Sync ChromaDB.
 """
 
 import os
 import sys
 import time
 import requests
+import numpy as np
 import pandas as pd
 import streamlit as st
 import torch
@@ -84,7 +86,7 @@ def get_cached_langgraph_agent():
 
 
 # =========================================================================
-# 3. INJEKSI CUSTOM CSS (THEME: GOOGLE GEMINI DARK + STITCH DESIGN SYSTEM)
+# 3. INJEKSI CUSTOM CSS (ANIMASI 3D & THEME GOOGLE GEMINI DARK)
 # =========================================================================
 def inject_gemini_theme_css():
     st.markdown("""
@@ -97,11 +99,11 @@ def inject_gemini_theme_css():
             font-family: 'Inter', sans-serif !important;
         }
         
-        /* Unified Container Canvas (Google Gemini Center Column) */
+        /* Unified Container Canvas */
         .main .block-container {
-            max-width: 840px !important;
-            padding-top: 2rem !important;
-            padding-bottom: 9rem !important; /* Ruang lega di bawah agar tidak tertutup chat input */
+            max-width: 860px !important;
+            padding-top: 1.8rem !important;
+            padding-bottom: 9rem !important;
             margin: 0 auto !important;
         }
         
@@ -125,16 +127,24 @@ def inject_gemini_theme_css():
             border-radius: 12px !important;
             padding: 10px 14px !important;
             margin-bottom: 8px !important;
-            transition: all 0.2s ease !important;
+            transition: all 0.25s ease !important;
             cursor: pointer !important;
         }
         [data-testid="stSidebar"] div[role="radiogroup"] > label:hover {
-            background: rgba(255, 255, 255, 0.07) !important;
-            border-color: rgba(168, 199, 250, 0.2) !important;
+            background: rgba(255, 255, 255, 0.08) !important;
+            border-color: rgba(168, 199, 250, 0.25) !important;
+            transform: translateX(2px);
         }
         [data-testid="stSidebar"] div[role="radiogroup"] > label[data-checked="true"] {
             background: #282a2c !important;
             border-color: rgba(168, 199, 250, 0.4) !important;
+        }
+        
+        /* 3D Pulse Glow Keyframes */
+        @keyframes pulse3DGlow {
+            0% { transform: scale(1); filter: drop-shadow(0 0 6px rgba(66, 133, 244, 0.4)); }
+            50% { transform: scale(1.08); filter: drop-shadow(0 0 16px rgba(155, 114, 203, 0.7)); }
+            100% { transform: scale(1); filter: drop-shadow(0 0 6px rgba(66, 133, 244, 0.4)); }
         }
         
         /* Gemini Sparkle Gradient */
@@ -153,6 +163,7 @@ def inject_gemini_theme_css():
             font-size: 22px;
             font-weight: bold;
             margin-right: 6px;
+            animation: pulse3DGlow 3.5s infinite ease-in-out;
         }
         
         /* Native Streamlit Chat Message Customization */
@@ -187,6 +198,7 @@ def inject_gemini_theme_css():
             color: #ffffff !important;
             border-radius: 50% !important;
             border: 1px solid rgba(255, 255, 255, 0.15) !important;
+            box-shadow: 0 0 10px rgba(155, 114, 203, 0.3) !important;
         }
         
         /* Hero Welcome Screen (Gemini Empty State) */
@@ -211,13 +223,19 @@ def inject_gemini_theme_css():
             margin-bottom: 28px;
         }
         
-        /* Source Citation Card in Expander */
+        /* Source Citation Card with 3D Hover */
         .source-card-gemini {
             background: #1e1f20;
             border: 1px solid rgba(255, 255, 255, 0.08);
             border-radius: 12px;
             padding: 12px 14px;
             margin-bottom: 8px;
+            transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .source-card-gemini:hover {
+            transform: translateY(-2px);
+            border-color: rgba(168, 199, 250, 0.3) !important;
+            box-shadow: 0 6px 20px rgba(66, 133, 244, 0.12) !important;
         }
         
         /* Telemetry & Action Footer */
@@ -233,20 +251,14 @@ def inject_gemini_theme_css():
             font-family: 'JetBrains Mono', monospace;
         }
         
-        /* Inline Citation Badge */
-        .pdf-pill-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            background: rgba(168, 199, 250, 0.12);
-            border: 1px solid rgba(168, 199, 250, 0.25);
-            color: #a8c7fa;
-            border-radius: 6px;
-            padding: 2px 8px;
-            font-size: 11.5px;
-            font-family: 'JetBrains Mono', monospace;
-            font-weight: 500;
-            margin-top: 6px;
+        /* 3D Glassmorphism Panel */
+        .glass-panel-3d {
+            background: rgba(30, 31, 32, 0.7) !important;
+            backdrop-filter: blur(12px) !important;
+            border: 1px solid rgba(255, 255, 255, 0.08) !important;
+            border-radius: 16px !important;
+            padding: 16px !important;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3) !important;
         }
         
         /* Disclaimer Bottom Note */
@@ -258,7 +270,7 @@ def inject_gemini_theme_css():
             margin-bottom: 12px;
         }
         
-        /* Custom Modern Button */
+        /* Custom Modern Button with 3D Hover */
         .stButton > button {
             background: #282a2c !important;
             color: #e3e3e3 !important;
@@ -268,15 +280,17 @@ def inject_gemini_theme_css():
             font-size: 13px !important;
             padding: 12px 16px !important;
             text-align: left !important;
-            transition: all 0.2s ease !important;
+            transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
         }
         .stButton > button:hover {
             background: #37393b !important;
             border-color: #a8c7fa !important;
             color: #ffffff !important;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.2) !important;
         }
         
-        /* Streamlit Native Chat Input Styling (Gemini Floating Pill) */
+        /* Streamlit Native Chat Input Styling */
         [data-testid="stChatInput"] {
             border-radius: 28px !important;
             background-color: #1e1f20 !important;
@@ -336,7 +350,7 @@ if "user_role" not in st.session_state:
 # 5. SIDEBAR: GEMINI STYLE NAVIGATION & SYSTEM ADMIN
 # =========================================================================
 with st.sidebar:
-    # Logo & Brand Header
+    # Logo & Brand Header dengan Animasi Glow
     st.markdown("""
     <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 20px; padding: 4px 8px;">
         <span class="sparkle-icon">✦</span>
@@ -353,13 +367,13 @@ with st.sidebar:
 
     st.markdown("<div style='margin: 12px 0;'></div>", unsafe_allow_html=True)
 
-    # Menu Navigasi Antarmuka (Ringkas & Bersih ala Gemini)
+    # Menu Navigasi Antarmuka (Termasuk 🌌 3D Vektor Galaxy)
     nav_option = st.radio(
         "Navigasi:",
         options=[
             "💬 Tanya Arsip Kampus",
             "🔍 Pencarian Dokumen",
-            "📊 Database Vektor"
+            "🌌 Visualisasi 3D & Vektor"
         ],
         index=0 if st.session_state.active_mode == "chat" else (1 if st.session_state.active_mode == "search" else 2),
         label_visibility="collapsed"
@@ -370,7 +384,7 @@ with st.sidebar:
     elif "Pencarian" in nav_option:
         st.session_state.active_mode = "search"
     else:
-        st.session_state.active_mode = "explore"
+        st.session_state.active_mode = "explore_3d"
 
     st.divider()
 
@@ -719,31 +733,98 @@ elif st.session_state.active_mode == "search":
 
 
 # =========================================================================
-# 9. KONTEN TAB 3: VEKTOR DATABASE EXPLORER
+# 9. KONTEN TAB 3: 🌌 VISUALISASI 3D RUANG VEKTOR (PCA 3D + PLOTLY)
 # =========================================================================
-elif st.session_state.active_mode == "explore":
-    st.markdown("### 📊 Database Vektor & Metadata Arsip (ChromaDB)")
-    st.caption("Pratinjau koleksi embedding dokumen yang tersimpan dalam database vektor.")
+elif st.session_state.active_mode == "explore_3d":
+    st.markdown("### 🌌 Visualisasi 3D Galaksi Dokumen Arsip")
+    st.caption("Eksplorasi ruang semantik embedding dokumen hasil fine-tuning MiniLM yang diproyeksikan ke ruang 3D.")
 
-    if collection is not None:
+    if collection is not None and doc_count > 0:
         try:
-            res = collection.get(limit=25, include=["metadatas"])
-            if res and res.get("ids"):
+            with st.spinner("Memuat ruang vektor 3D..."):
+                sample_limit = min(200, doc_count)
+                raw_data = collection.get(limit=sample_limit, include=["embeddings", "metadatas", "documents"])
+
+                if raw_data and raw_data.get("embeddings") is not None and len(raw_data["embeddings"]) > 3:
+                    embeddings_array = np.array(raw_data["embeddings"])
+                    metadatas = raw_data.get("metadatas", [])
+                    
+                    # Proyeksi Dimensi 384D -> 3D menggunakan PCA
+                    from sklearn.decomposition import PCA
+                    pca_3d = PCA(n_components=3, random_state=42)
+                    reduced_3d = pca_3d.fit_transform(embeddings_array)
+
+                    titles = [m.get("title", f"Dokumen #{i}")[:45] for i, m in enumerate(metadatas)]
+                    units = [m.get("unit_kerja", "Universitas") for m in metadatas]
+                    categories = [m.get("category", "Arsip") for m in metadatas]
+                    years = [str(m.get("year", "2024")) for m in metadatas]
+
+                    # Buat DataFrame 3D
+                    df_3d = pd.DataFrame({
+                        "x": reduced_3d[:, 0],
+                        "y": reduced_3d[:, 1],
+                        "z": reduced_3d[:, 2],
+                        "Judul": titles,
+                        "Unit": units,
+                        "Kategori": categories,
+                        "Tahun": years
+                    })
+
+                    # Render 3D Galaxy menggunakan Plotly
+                    import plotly.express as px
+                    fig = px.scatter_3d(
+                        df_3d,
+                        x="x",
+                        y="y",
+                        z="z",
+                        color="Unit",
+                        hover_name="Judul",
+                        hover_data={"Unit": True, "Kategori": True, "Tahun": True, "x": False, "y": False, "z": False},
+                        opacity=0.85,
+                        title=f"Ruang Semantik 3D ({len(df_3d)} Arsip Kampus)"
+                    )
+
+                    fig.update_traces(marker=dict(size=5, line=dict(width=0.5, color='white')))
+                    fig.update_layout(
+                        paper_bgcolor="#131314",
+                        plot_bgcolor="#131314",
+                        font=dict(color="#e3e3e3", family="Plus Jakarta Sans"),
+                        margin=dict(l=0, r=0, b=0, t=40),
+                        scene=dict(
+                            xaxis=dict(backgroundcolor="#131314", gridcolor="rgba(255,255,255,0.06)", showbackground=False, zerolinecolor="rgba(255,255,255,0.1)"),
+                            yaxis=dict(backgroundcolor="#131314", gridcolor="rgba(255,255,255,0.06)", showbackground=False, zerolinecolor="rgba(255,255,255,0.1)"),
+                            zaxis=dict(backgroundcolor="#131314", gridcolor="rgba(255,255,255,0.06)", showbackground=False, zerolinecolor="rgba(255,255,255,0.1)")
+                        )
+                    )
+
+                    st.plotly_chart(fig, use_container_width=True)
+                    st.info("💡 **Tips Interaksi 3D:** Klik dan geser mouse untuk memutar galaksi 360°, scroll mouse untuk zoom, atau sorot titik bintang untuk melihat rincian dokumen.")
+
+                else:
+                    st.info("Embedding belum tersedia untuk visualisasi 3D.")
+
+        except Exception as ex_3d:
+            st.warning(f"Visualisasi 3D grafis disederhanakan: {ex_3d}")
+
+        # Tabel Dokumen Vektor
+        st.markdown("<div style='margin-top: 24px;'></div>", unsafe_allow_html=True)
+        st.markdown("#### 📋 Tabel Koleksi Vektor")
+        try:
+            res_tab = collection.get(limit=20, include=["metadatas"])
+            if res_tab and res_tab.get("ids"):
                 records = []
-                for idx, d_id in enumerate(res["ids"]):
-                    meta = res["metadatas"][idx] if res.get("metadatas") else {}
+                for idx, d_id in enumerate(res_tab["ids"]):
+                    meta = res_tab["metadatas"][idx] if res_tab.get("metadatas") else {}
                     records.append({
                         "ID": d_id[:12] + "...",
                         "Judul Dokumen": meta.get("title", "-"),
                         "Unit Kerja": meta.get("unit_kerja", "-"),
                         "Kategori": meta.get("category", "-"),
-                        "Tahun": meta.get("year", "-"),
-                        "No. Dokumen": meta.get("document_number", "-"),
+                        "Tahun": meta.get("year", "-")
                     })
                 st.dataframe(pd.DataFrame(records), use_container_width=True, hide_index=True)
-            else:
-                st.info("Database vektor kosong.")
-        except Exception as ex:
-            st.error(f"Gagal membaca data vektor: {ex}")
+        except Exception:
+            pass
+
     else:
-        st.error("ChromaDB tidak terhubung.")
+        st.error("ChromaDB tidak terhubung atau masih kosong.")
