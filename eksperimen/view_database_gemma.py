@@ -260,6 +260,71 @@ def inject_gemini_theme_css():
             padding: 16px !important;
             box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3) !important;
         }
+
+        /* ========================================================= */
+        /* AMBIENT AI SHADER MESH EFFECT                             */
+        /* ========================================================= */
+        @keyframes shaderMeshFlow {
+            0% {
+                transform: scale(1) rotate(0deg);
+                opacity: 0.45;
+                filter: blur(60px);
+            }
+            50% {
+                transform: scale(1.15) translate(20px, -15px) rotate(120deg);
+                opacity: 0.7;
+                filter: blur(75px);
+            }
+            100% {
+                transform: scale(1) rotate(360deg);
+                opacity: 0.45;
+                filter: blur(60px);
+            }
+        }
+
+        .shader-ambient-container {
+            position: relative;
+            padding: 24px 20px;
+            margin-bottom: 24px;
+            border-radius: 24px;
+            background: rgba(30, 31, 32, 0.45);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+            overflow: hidden;
+        }
+
+        .shader-orb-blue {
+            position: absolute;
+            width: 260px;
+            height: 260px;
+            border-radius: 50%;
+            background: radial-gradient(circle, #4285F4 0%, #7da5ff 40%, transparent 70%);
+            top: -40px;
+            left: -40px;
+            animation: shaderMeshFlow 14s infinite ease-in-out;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .shader-orb-purple {
+            position: absolute;
+            width: 240px;
+            height: 240px;
+            border-radius: 50%;
+            background: radial-gradient(circle, #9B72CB 0%, #D96570 45%, transparent 70%);
+            bottom: -30px;
+            right: -30px;
+            animation: shaderMeshFlow 18s infinite ease-in-out reverse;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .shader-hero-content {
+            position: relative;
+            z-index: 1;
+        }
         
         /* Disclaimer Bottom Note */
         .gemini-disclaimer {
@@ -499,12 +564,16 @@ if st.session_state.active_mode == "chat":
     if not st.session_state.gemma_chat_history:
         display_name = st.session_state.user_name if st.session_state.user_name else "Civitas Akademika"
         st.markdown(f"""
-        <div class="hero-welcome-container">
-            <div class="hero-title">
-                <span class="gemini-gradient">Halo, {display_name}</span>
-            </div>
-            <div class="hero-subtitle">
-                Ada yang bisa saya bantu temukan di arsip kampus hari ini?
+        <div class="shader-ambient-container">
+            <div class="shader-orb-blue"></div>
+            <div class="shader-orb-purple"></div>
+            <div class="shader-hero-content">
+                <div class="hero-title">
+                    <span class="gemini-gradient">Halo, {display_name}</span>
+                </div>
+                <div class="hero-subtitle" style="margin-bottom: 0px;">
+                    Ada yang bisa saya bantu temukan di arsip kampus hari ini?
+                </div>
             </div>
         </div>
         """, unsafe_allow_html=True)
