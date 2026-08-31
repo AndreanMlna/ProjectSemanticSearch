@@ -166,6 +166,24 @@ def inject_gemini_theme_css():
             animation: pulse3DGlow 3.5s infinite ease-in-out;
         }
         
+        /* Custom Chromatic Shader Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #131314;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: linear-gradient(180deg, #4285F4 0%, #9B72CB 50%, #D96570 100%);
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(155, 114, 203, 0.4);
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: linear-gradient(180deg, #7da5ff 0%, #c0a9ff 50%, #f4a261 100%);
+            box-shadow: 0 0 16px rgba(125, 165, 255, 0.7);
+        }
+
         /* Native Streamlit Chat Message Customization */
         div[data-testid="stChatMessage"] {
             padding: 8px 12px !important;
@@ -185,11 +203,29 @@ def inject_gemini_theme_css():
             box-shadow: 0 2px 8px rgba(0,0,0,0.15) !important;
         }
         
-        /* Assistant Chat Message (Clean Left Aligned Stream) */
+        /* Assistant Response Card with Animated Shader Left Border & Subtle Ambient Glow */
+        @keyframes responseShaderGlow {
+            0% {
+                border-left-color: #4285F4;
+                box-shadow: -4px 0 14px rgba(66, 133, 244, 0.2);
+            }
+            50% {
+                border-left-color: #9B72CB;
+                box-shadow: -4px 0 20px rgba(155, 114, 203, 0.35);
+            }
+            100% {
+                border-left-color: #D96570;
+                box-shadow: -4px 0 14px rgba(217, 101, 112, 0.2);
+            }
+        }
+
         div[data-testid="stChatMessage"]:has(div[data-testid="stChatMessageAvatarAssistant"]) {
-            background-color: transparent !important;
-            border: none !important;
-            padding-left: 0 !important;
+            background: linear-gradient(90deg, rgba(66, 133, 244, 0.04) 0%, transparent 100%) !important;
+            border-left: 2px solid #4285F4 !important;
+            border-radius: 4px 16px 16px 4px !important;
+            padding-left: 12px !important;
+            animation: responseShaderGlow 6s infinite alternate ease-in-out !important;
+            transition: all 0.3s ease !important;
         }
         
         /* AI Assistant Avatar */
@@ -223,7 +259,13 @@ def inject_gemini_theme_css():
             margin-bottom: 28px;
         }
         
-        /* Source Citation Card with 3D Hover */
+        /* Source Citation Card with Shader Glow on Hover */
+        @keyframes shaderCardBorder {
+            0% { border-color: rgba(66, 133, 244, 0.3); }
+            50% { border-color: rgba(155, 114, 203, 0.5); }
+            100% { border-color: rgba(217, 101, 112, 0.3); }
+        }
+
         .source-card-gemini {
             background: #1e1f20;
             border: 1px solid rgba(255, 255, 255, 0.08);
@@ -234,8 +276,8 @@ def inject_gemini_theme_css():
         }
         .source-card-gemini:hover {
             transform: translateY(-2px);
-            border-color: rgba(168, 199, 250, 0.3) !important;
-            box-shadow: 0 6px 20px rgba(66, 133, 244, 0.12) !important;
+            animation: shaderCardBorder 3s infinite alternate ease-in-out !important;
+            box-shadow: 0 6px 22px rgba(66, 133, 244, 0.18) !important;
         }
         
         /* Telemetry & Action Footer */
@@ -326,6 +368,27 @@ def inject_gemini_theme_css():
             z-index: 1;
         }
         
+        /* Sidebar Recent Chat Shader Hover */
+        .sidebar-recent-chip {
+            font-size: 12.5px;
+            color: #c4c7c5;
+            padding: 8px 12px;
+            border-radius: 10px;
+            margin-bottom: 6px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.04);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            transition: all 0.25s ease;
+        }
+        .sidebar-recent-chip:hover {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(168, 199, 250, 0.35) !important;
+            transform: translateX(3px);
+            box-shadow: 0 4px 14px rgba(66, 133, 244, 0.15);
+        }
+
         /* Disclaimer Bottom Note */
         .gemini-disclaimer {
             text-align: center;
@@ -335,7 +398,13 @@ def inject_gemini_theme_css():
             margin-bottom: 12px;
         }
         
-        /* Custom Modern Button with 3D Hover */
+        /* Interactive Shader Shimmer Buttons (Prompt Chips) */
+        @keyframes shaderShimmerBtn {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
         .stButton > button {
             background: #282a2c !important;
             color: #e3e3e3 !important;
@@ -348,23 +417,40 @@ def inject_gemini_theme_css():
             transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
         }
         .stButton > button:hover {
-            background: #37393b !important;
-            border-color: #a8c7fa !important;
+            background: linear-gradient(135deg, #2d3035 0%, #342d3d 50%, #3a2e33 100%) !important;
+            background-size: 200% 200% !important;
+            animation: shaderShimmerBtn 4s infinite ease !important;
+            border-color: rgba(168, 199, 250, 0.45) !important;
             color: #ffffff !important;
             transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.2) !important;
+            box-shadow: 0 6px 20px rgba(66, 133, 244, 0.18) !important;
         }
         
-        /* Streamlit Native Chat Input Styling */
+        /* Streamlit Native Chat Input Styling with Shader Breathing Aura */
+        @keyframes inputShaderAura {
+            0% {
+                box-shadow: 0 0 16px rgba(66, 133, 244, 0.25), 0 4px 20px rgba(0,0,0,0.4);
+                border-color: rgba(125, 165, 255, 0.5);
+            }
+            50% {
+                box-shadow: 0 0 24px rgba(155, 114, 203, 0.4), 0 6px 25px rgba(0,0,0,0.5);
+                border-color: rgba(192, 169, 255, 0.7);
+            }
+            100% {
+                box-shadow: 0 0 16px rgba(66, 133, 244, 0.25), 0 4px 20px rgba(0,0,0,0.4);
+                border-color: rgba(125, 165, 255, 0.5);
+            }
+        }
+
         [data-testid="stChatInput"] {
             border-radius: 28px !important;
             background-color: #1e1f20 !important;
             border: 1px solid rgba(255, 255, 255, 0.14) !important;
             box-shadow: 0 4px 20px rgba(0,0,0,0.3) !important;
+            transition: all 0.3s ease !important;
         }
         [data-testid="stChatInput"]:focus-within {
-            border-color: #7da5ff !important;
-            box-shadow: 0 0 14px rgba(125, 165, 255, 0.25) !important;
+            animation: inputShaderAura 4s infinite ease-in-out !important;
         }
     </style>
     """, unsafe_allow_html=True)
@@ -459,7 +545,7 @@ with st.sidebar:
         for idx, hist in enumerate(reversed(st.session_state.gemma_chat_history[-5:])):
             q_short = hist["question"][:28] + "..." if len(hist["question"]) > 28 else hist["question"]
             st.markdown(f"""
-            <div style="font-size: 12.5px; color: #c4c7c5; padding: 6px 10px; border-radius: 8px; margin-bottom: 4px; background: rgba(255,255,255,0.03); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+            <div class="sidebar-recent-chip">
                 💬 {q_short}
             </div>
             """, unsafe_allow_html=True)
